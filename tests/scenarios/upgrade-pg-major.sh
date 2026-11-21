@@ -24,8 +24,11 @@ step "documented recovery: fresh 18 cluster → restore from the full archive"
 systemctl stop nextcloud-db nextcloud-fpm nextcloud-caddy nextcloud-cron.timer \
   nextcloud-snapshot.timer nextcloud-data-sync.timer 2>/dev/null || true
 rm -rf /var/lib/nextcloud-db
-nix run .#deploy
+# NOTE: this deploy aborts at init — mid-recovery state (config.php exists,
+# database empty) is not installable; the restore below heals it
+nix run .#deploy || echo "  (deploy aborted mid-recovery — expected; restore heals this)"
 FORCE=1 nix run .#nc-restore -- latest
+nix run .#deploy
 
 step "post-migration asserts under PostgreSQL 18"
 v="$(PG_BINARY_VERSION)"
