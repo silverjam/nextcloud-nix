@@ -97,6 +97,9 @@ EOF
 
 echo "[harness] creating boot overlay"
 "$QIMG" create -f qcow2 -b "$IMGCACHE" -F qcow2 "$DISK"
+# base cloud images have a 3.5G virtual disk — too small for apt+nix;
+# grow to 12G and let cloud-init's growpart expand the rootfs on first boot
+"$QIMG" resize "$DISK" 12G
 
 # --- boot (KVM when available, TCG emulation otherwise)
 ACCEL="accel=tcg"
@@ -130,7 +133,7 @@ done
 echo "[harness] vm is up (ssh -p $SSH_PORT root@127.0.0.1)"
 
 echo "[harness] copying repo into vm (/test)"
-tar -C "$REPO" -cf - . | SSHRUN 'mkdir -p /test && tar -C /test -xf -'
+tar -C "$REPO" --exclude='./.git' -cf - . | SSHRUN 'mkdir -p /test && tar -C /test -xf -'
 
 echo "[harness] installing Nix in vm"
 if [ "$SCENARIO" = "reboot" ]; then
