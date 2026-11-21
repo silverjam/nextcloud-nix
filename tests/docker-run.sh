@@ -78,7 +78,7 @@ docker exec -i "$C" bash -s < "$REPO/tests/lib/install-nix.sh"
 echo "[harness] running scenario: $SCENARIO"
 docker exec -i "$C" bash -s < <(
   cat "$REPO/tests/lib/prelude.sh" "$REPO/tests/lib/web.sh" \
-      "$REPO/tests/scenarios/$SCENARIO.sh"
+      "$REPO/tests/lib/upgrade.sh" "$REPO/tests/scenarios/$SCENARIO.sh"
 )
 
 echo

@@ -144,8 +144,8 @@ SSHRUN 'bash -s' < "$REPO/tests/lib/install-nix.sh"
 
 if [ "$SCENARIO" = "reboot" ]; then
   # install once, then stream the install asserts + reboot + post-reboot asserts
-  STREAM1="$REPO/tests/lib/prelude.sh $REPO/tests/lib/web.sh $REPO/tests/scenarios/install.sh"
-  STREAM2="$REPO/tests/lib/prelude.sh $REPO/tests/lib/web.sh $REPO/tests/lib/reboot-assert.sh"
+  STREAM1="$REPO/tests/lib/prelude.sh $REPO/tests/lib/web.sh $REPO/tests/lib/upgrade.sh $REPO/tests/scenarios/install.sh"
+  STREAM2="$REPO/tests/lib/prelude.sh $REPO/tests/lib/web.sh $REPO/tests/lib/upgrade.sh $REPO/tests/lib/reboot-assert.sh"
   cat $STREAM1 | SSHRUN 'bash -s'
   SSHRUN 'sync && systemctl reboot' 2>/dev/null || true
   echo "[harness] vm rebooting"
@@ -168,7 +168,8 @@ if [ "$SCENARIO" = "reboot" ]; then
   cat $STREAM2 | SSHRUN 'bash -s'
 else
   cat "$REPO/tests/lib/prelude.sh" "$REPO/tests/lib/web.sh" \
-      "$REPO/tests/scenarios/$SCENARIO.sh" | SSHRUN 'bash -s'
+      "$REPO/tests/lib/upgrade.sh" "$REPO/tests/scenarios/$SCENARIO.sh" \
+    | SSHRUN 'bash -s'
 fi
 
 echo
