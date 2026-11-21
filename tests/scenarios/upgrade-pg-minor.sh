@@ -12,12 +12,15 @@ install_and_assert
 SEED_INSTANCE
 v="$(PG_BINARY_VERSION)"
 case "$v" in 17.11*) ok "baseline installed: PostgreSQL $v" ;; *) fail "expected pg 17.11, got $v" ;; esac
+NCV="$(NC_INSTALLED_VERSION)"
+case "$NCV" in 34.0.5*) ok "baseline app: NC $NCV" ;; *) fail "expected NC 34.0.5, got $NCV" ;; esac
 
-step "upgrade: restore current flake (17.12) → deploy (in-place restart)"
+step "upgrade: restore current flake → deploy (pg 17.11→17.12 AND nc 34.0.5→34.0.6 move together, exactly like a real `nix flake update`) → occ upgrade"
 RESTORE_BASE
 nix run .#deploy
+nix run .#occ -- upgrade >/dev/null || fail "occ upgrade failed"
 v2="$(PG_BINARY_VERSION)"
 case "$v2" in 17.12*) ok "now on PostgreSQL $v2" ;; *) fail "expected pg 17.12, got $v2" ;; esac
-ASSERT_HEALTHY ""
+ASSERT_HEALTHY 34.0.6
 nix run .#nc-backup -- validate-deep
-ok "PG 17.11 → 17.12 minor upgrade complete (data dir survived)"
+ok "pg 17.11→17.12 (+nc patch bump) upgrade complete (data dir survived)"
