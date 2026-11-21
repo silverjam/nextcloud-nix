@@ -29,13 +29,15 @@ login_test() {
 
   final="$(curl -s -b "$JAR" -L -o /dev/null -w '%{url_effective}' "$BASE_URL/apps/files" || true)"
   case "$final" in
-    */login*"") ;;
-  esac
-  case "$final" in
     */login*) echo "  FAIL redirected back to login ($final, code=$code)" >&2; exit 1 ;;
   esac
-  grep -q "data-user=\"admin\"" "$HTML" || {
-    echo "  FAIL session page does not show user admin (code=$code, final=$final)" >&2
+
+  # authoritative session proof: OCS self-query with the session cookie
+  local whoami
+  whoami="$(curl -s -b "$JAR" -H 'OCS-APIRequest: true' \
+    "$BASE_URL/ocs/v2.php/cloud/user?format=json" || true)"
+  echo "$whoami" | grep -q '"id":"admin"' || {
+    echo "  FAIL session not identified as admin (code=$code, whoami=${whoami:0:120})" >&2
     exit 1
   }
   rm -f "$JAR" "$HTML"
