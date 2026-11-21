@@ -1225,8 +1225,9 @@
       provisionService = pkgs.writeText "nextcloud-provision.service" ''
         [Unit]
         Description=Nextcloud declarative user provisioning (Nix-managed)
+        # After-only: Requires would cascade-stop provision whenever init
+        # restarts (deploy restarts both — double invocation)
         After=nextcloud-init.service
-        Requires=nextcloud-init.service
 
         [Service]
         Type=oneshot
