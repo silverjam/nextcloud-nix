@@ -1161,10 +1161,10 @@
           ${phpEnv}/bin/php -v > $out
           grep -q pdo_pgsql <(${phpEnv}/bin/php -m)
         '';
-        # F layer: unit-file verification moved to the Docker harness (tests/)
+        # unit-file verification moved to the container harness (tests/)
         # — sandboxed systemd-analyze insists on /run/systemd, and running it
         # inside the container against Ubuntu's systemd is more faithful.
-        # F layer: shellcheck every generated bash script
+        # shellcheck every generated bash script
         scriptsLint =
           pkgs.runCommand
             "scripts-shellcheck"
@@ -1183,7 +1183,7 @@
                 ${initScript}
               touch $out
             '';
-        # F layer: the generated PHP config-writer must parse
+        # the generated PHP config-writer must parse
         applyConfigLint = pkgs.runCommand "applyconfig-php-lint" {
           nativeBuildInputs = [ phpEnv ];
         } ''
