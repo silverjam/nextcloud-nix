@@ -27,12 +27,8 @@ login_test() {
     --data-urlencode "requesttoken=$token" \
     "$BASE_URL/login")"
 
-  final="$(curl -s -b "$JAR" -L -o /dev/null -w '%{url_effective}' "$BASE_URL/apps/files" || true)"
-  case "$final" in
-    */login*) echo "  FAIL redirected back to login ($final, code=$code)" >&2; exit 1 ;;
-  esac
-
   # authoritative session proof: OCS self-query with the session cookie
+  # (reaching /apps/files is not proof — it renders for anonymous users too)
   local whoami
   whoami="$(curl -s -b "$JAR" -H 'OCS-APIRequest: true' \
     "$BASE_URL/ocs/v2.php/cloud/user?format=json" || true)"

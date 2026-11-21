@@ -519,6 +519,13 @@
         if [ -n "$LANIP" ]; then
           RUNOCC config:system:set trusted_domains 2 --value "$LANIP"
         fi
+        # 127.0.0.1: appended at the next free index (never clobbers user
+        # entries like a tailscale domain at index 3) if not present yet
+        if ! RUNOCC config:system:get trusted_domains \
+             | grep -qx '127.0.0.1'; then
+          IDX="$(RUNOCC config:system:get trusted_domains | grep -c . || echo 0)"
+          RUNOCC config:system:set trusted_domains "$IDX" --value 127.0.0.1
+        fi
         RUNOCC config:system:set maintenance_window_start --type integer --value 2
 
         # --- tidy up indexes the install may skip ---
