@@ -97,13 +97,36 @@ Nextcloud forbids skipping major versions, so bump one major at a time:
 ```bash
 nix run .#occ -- maintenance:mode --on
 nix flake update                 # or edit the pin in flake.nix
-nix run .#deploy
-nix run .#occ -- upgrade         # runs DB/app migrations
+just deploy                      # NOTE: may abort at init — expected (see below)
+nix run .#apply-config           # de-stale apps_paths BEFORE occ can boot
+nix run .#occ -- upgrade         # DB migrations
+nix run .#occ -- maintenance:mode --off
+just deploy                      # clean re-run, now that the db is current
 nix run .#occ -- maintenance:mode --off
 ```
 
-For everyday security updates re-running `nix flake update && nix run .#deploy`
-is enough (same major ⇒ no manual `upgrade` needed, deploy restarts everything).
+Two behaviors the upgrade drills (`tests/` scenarios `upgrade-*`) documented —
+both are expected, not bugs:
+
+- **NC major swaps**: between the code swap and `occ upgrade`, `nextcloud-init`
+  fails (its db-occ commands are refused while `needsDbUpgrade`), so the
+  deploy aborts mid-way. The remedy is exactly the sequence above. The init
+  applies nix-owned config values BEFORE any occ call (after a code swap,
+  `occ` cannot even boot with a stale `apps_paths` — that is what
+  `nix run .#apply-config` solves, and it also works as a rescue tool).
+- **PG major swaps**: the data dir can't be read by the new binary, so the db
+  unit fails by design. Recovery = the full archive taken before the rebuild:
+  stop stack → wipe `/var/lib/nextcloud-db` → deploy (fresh cluster) →
+  `nix run .#nc-restore -- latest` → deploy. `nc-restore` always leaves the
+  restored instance out of maintenance mode (full archives snapshot
+  `config.php` during the ON window).
+
+For everyday security updates re-running `nix flake update && just deploy`
+is enough (same major ⇒ tiny/no migrations; the drills cover this as
+`upgrade-nc-minor` / `upgrade-pg-minor` with pinned pre-bump nixpkgs revs).
+
+PostgreSQL major-version bumps (pin `pg = pkgs.postgresql_17` in `flake.nix`)
+are exactly the `upgrade-pg-major` drill — backup, rebuild, `nc-restore`.
 
 PostgreSQL major-version bumps (pin `pg = pkgs.postgresql_17` in `flake.nix`)
 need a dump/restore or `pg_upgrade` — don't just rebuild:
