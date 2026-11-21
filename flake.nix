@@ -1162,6 +1162,14 @@
 
         for raw in "''${SPECS[@]}"; do
           IFS=$'\t' read -r uid display quota groups <<< "$raw"
+          # removal wins: a uid listed in deprovisionedUsers is never
+          # re-created by the provision loop (they would otherwise oscillate
+          # create → delete on every deploy)
+          SKIP=" ''${REMOVES[*]} "
+          [[ "$SKIP" == *" $uid "* ]] && {
+            echo "provision: skipping $uid — listed in deprovisionedUsers"
+            continue
+          }
           if OCC user:info "$uid" >/dev/null 2>&1; then
             echo "provision: $uid exists — applying desired quota/groups"
           else

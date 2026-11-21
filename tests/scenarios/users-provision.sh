@@ -34,6 +34,8 @@ chown nextcloud:nextcloud "$F"
 ok "drill2 created with a file to lose"
 
 sed -i 's|deprovisionedUsers = \[ \];|deprovisionedUsers = [ "drill2" ];|' /test/flake.nix
+# realistic deprovision: remove from the provision list too (drill2 leaves)
+sed -i 's| drill2 = { displayName = "Drill Two"; }; ||' /test/flake.nix
 nix run .#deploy
 
 step "drill2 removed, backup verified on disk"
