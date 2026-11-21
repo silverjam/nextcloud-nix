@@ -33,7 +33,7 @@ expect_equal "0" "$C" "scratch db hygiene"
 step "mutate the marker, restore latest, assert DB rollback"
 nix run .#occ -- user:setting admin test backup_marker "changed-after-snapshot" >/dev/null
 FORCE=1 nix run .#nc-restore -- latest
-V="$(PSQL -tAc "SELECT configvalue FROM oc_preferences WHERE uid='admin' AND appid='test' AND configkey='backup_marker'" | tr -d '[:space:]')"
+V="$(PSQL -tAc "SELECT configvalue FROM oc_preferences WHERE userid='admin' AND appid='test' AND configkey='backup_marker'" | tr -d '[:space:]')"
 expect_equal "$TS" "$V" "db marker rolled back by restore"
 
 step "post-restore integrity"
