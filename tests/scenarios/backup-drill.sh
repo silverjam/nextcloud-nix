@@ -16,9 +16,11 @@ nix run .#nc-backup -- validate-deep
 ok "snapshot saved + deep-validated"
 
 step "maintenance mode is OFF after backup (trap guarantee)"
-# the key is only written when mode was toggled at least once — treat
-# unset (empty) and false as OFF
-M="$(nix run .#occ -- config:system:get maintenance 2>/dev/null | tr -d '[:space:]')"
+# the key is only written when mode was toggled at least once; on unset
+# keys occ exits non-zero (hidden stderr) — neutralize it and treat
+# empty as OFF
+M="$(nix run .#occ -- config:system:get maintenance 2>/dev/null \
+  | tr -d '[:space:]' || true)"
 case "$M" in
   ""|false) ok "maintenance mode clean" ;;
   *) fail "maintenance mode ON after backup (got: '$M')" ;;
