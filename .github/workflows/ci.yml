@@ -46,6 +46,7 @@ on:
           - mirror-drill
           - restore-fresh
           - retention
+          - users-provision
           - upgrade-nc-major
           - upgrade-nc-minor
           - upgrade-pg-major
@@ -69,6 +70,7 @@ on:
           - mirror-drill
           - restore-fresh
           - retention
+          - users-provision
           - upgrade-nc-major
           - upgrade-nc-minor
           - upgrade-pg-major
@@ -132,6 +134,7 @@ jobs:
           - mirror-drill
           - restore-fresh
           - retention
+          - users-provision
           - upgrade-nc-major
           - upgrade-nc-minor
           - upgrade-pg-major
