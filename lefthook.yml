@@ -1,0 +1,20 @@
+# Git hooks (pre-commit) — run automatically on `git commit`.
+#
+# Escape hatches:
+#   git commit --no-verify       skip all hooks once
+#   LEFTHOOK=0 git commit …      same, env form
+# Design notes:
+#   - `nix flake check` evaluates the WORKTREE (not the staged tree) — usually
+#     what you want: fail fast before anything broken leaves the editor.
+#   - During rebases the hook auto-skips to avoid double-runs.
+pre-commit:
+  skip:
+    - rebase
+    - merge
+  commands:
+    flake-check:
+      run: nix flake check
+    shellcheck-tests:
+      run: nix run nixpkgs#shellcheck -- -S error tests/*.sh tests/lib/*.sh tests/scenarios/*.sh
+    just-syntax:
+      run: just --justfile justfile --list > /dev/null
