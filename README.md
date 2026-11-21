@@ -92,41 +92,162 @@ nix run .#occ -- background:cron
 
 ## Upgrades
 
-Nextcloud forbids skipping major versions, so bump one major at a time:
+All four upgrade kinds are rehearsed 1:1 by test scenarios — whatever the
+walkthrough below says, `just test-docker <scenario>` (or `just test-vm …`)
+executes exactly that sequence against a disposable instance. Nextcloud
+forbids skipping major versions: always one major at a time.
+
+### PostgreSQL — minor (e.g. 17.11 → 17.12)
+
+**How it works:** minor releases are drop-in compatible — the data directory
+is not touched, postgres rewrites nothing, there are no migrations. The
+upgrade is a binary + library swap followed by an in-place restart.
 
 ```bash
+nix flake update        # moves the pin (rides along with other updates)
+just deploy             # pg restarts on the new binary; datadir survives
+```
+
+Verify: `nix run .#postgresql -- --version` (expect 17.12+), `just backup-list`
+(take a fresh snapshot), and the instance is healthy — no `occ upgrade`
+involved, DB schema is untouched by design.
+
+**Drill:** `test-docker upgrade-pg-minor` pins nixpkgs at the parent of the
+real bump commit (`postgresql_17: 17.11 -> 17.12`), deploys the old tree,
+seeds a DB marker + file, then redeploys the current tree and asserts the
+marker, the file, the login and that `validate-deep` succeeds *under the new
+binary*. Also proves that a flake update rides pg and Nextcloud patches
+together (a real update moves both).
+
+### PostgreSQL — major (17 → 18)
+
+**How it works:** major versions have incompatible data directories. The 18
+binary *refuses to start* on a 17 cluster — this is expected and why the db
+unit fails by design during this migration. The database travels via the
+`pg_dump` inside a full archive.
+
+```bash
+# 0. plan a downtime window (backup + rebuild + restore)
 nix run .#occ -- maintenance:mode --on
-nix flake update                 # or edit the pin in flake.nix
-just deploy                      # NOTE: may abort at init — expected (see below)
-nix run .#apply-config           # de-stale apps_paths BEFORE occ can boot
-nix run .#occ -- upgrade         # DB migrations
-nix run .#occ -- maintenance:mode --off
-just deploy                      # clean re-run, now that the db is current
+
+# 1. the migration vehicle: a full archive (validated BEFORE touching anything)
+nix run .#nc-backup -- full
+nix run .#nc-backup -- validate-deep
+
+# 2. flip the pin in flake.nix:  pg = pkgs.postgresql_18;
+just deploy                     # db unit FAILS here — expected
+# (also expected: the deploy aborts mid-way, because init cannot work with
+#  an empty database and an existing config.php — the restore heals it)
+
+# 3. fresh 18 cluster
+sudo systemctl stop nextcloud-*.timer nextcloud-*.service nextcloud-db
+rm -rf /var/lib/nextcloud-db
+just deploy                     # db re-initialized by pg 18; init may fail again
+                                # (existing config.php + empty db is not
+                                #  installable) — the restore heals this
+
+# 4. bring the database back from the archive
+sudo -E env "PATH=$PATH" just restore latest || FORCE=1 just restore latest
+
+# 5. clean re-run + verify
+just deploy
+nix run .#occ -- status         # installed: true, no maintenance
+```
+
+**Rollback:** pin back `pg = pkgs.postgresql_17`, wipe the 18 cluster, deploy,
+`just restore latest` again — the same archive restores into the old major.
+Keep the pre-migration dump until you're confident (the archive is
+content-addressed and survives everything except `just reset`).
+
+**Drill:** `test-docker upgrade-pg-major` — full archive on 17 → flip to 18 →
+asserts the db unit fails as documented → wipes the cluster → restores →
+asserts PG 18.7, marker, seed file, login, and a fresh `validate-deep`
+under 18. `nc-restore` leaves the restored instance out of maintenance mode
+(full archives snapshot `config.php` during the ON window).
+
+User files (`data/`) are untouched by a db-major migration — only the
+database travels.
+
+### Nextcloud — minor (34.0.5 → 34.0.6)
+
+**How it works:** a `nix flake update` moves the patch release. Code is
+swapped (new store path mounted), and if that patch set carries any DB
+migrations `needsDbUpgrade` flips true until `occ upgrade` runs. DB schema
+changes in patch releases are rare and shallow — but run the upgrade anyway.
+
+```bash
+nix flake update
+just deploy
+nix run .#occ -- upgrade        # no-op or shallow; always run it
 nix run .#occ -- maintenance:mode --off
 ```
 
-Two behaviors the upgrade drills (`tests/` scenarios `upgrade-*`) documented —
-both are expected, not bugs:
+**Rollback:** pin the previous nixpkgs rev (e.g. revert `flake.lock` with
+`git checkout` on an old lock) and redeploy. Nextcloud itself doesn't
+support downgrades — if a patch misbehaves, restore from an archive instead
+(the drills' `restore-fresh` is that procedure in full).
 
-- **NC major swaps**: between the code swap and `occ upgrade`, `nextcloud-init`
-  fails (its db-occ commands are refused while `needsDbUpgrade`), so the
-  deploy aborts mid-way. The remedy is exactly the sequence above. The init
-  applies nix-owned config values BEFORE any occ call (after a code swap,
-  `occ` cannot even boot with a stale `apps_paths` — that is what
-  `nix run .#apply-config` solves, and it also works as a rescue tool).
-- **PG major swaps**: the data dir can't be read by the new binary, so the db
-  unit fails by design. Recovery = the full archive taken before the rebuild:
-  stop stack → wipe `/var/lib/nextcloud-db` → deploy (fresh cluster) →
-  `nix run .#nc-restore -- latest` → deploy. `nc-restore` always leaves the
-  restored instance out of maintenance mode (full archives snapshot
-  `config.php` during the ON window).
+**Drill:** `test-docker upgrade-nc-minor` pins nixpkgs at the parent of the
+real commit `nextcloud34: 34.0.5 -> 34.0.6`, deploys, seeds, then upgrades
+and asserts version 34.0.6 with marker + seed file + login intact.
 
-For everyday security updates re-running `nix flake update && just deploy`
-is enough (same major ⇒ tiny/no migrations; the drills cover this as
-`upgrade-nc-minor` / `upgrade-pg-minor` with pinned pre-bump nixpkgs revs).
+### Nextcloud — major (33 → 34)
 
-PostgreSQL major-version bumps (pin `pg = pkgs.postgresql_17` in `flake.nix`)
-are exactly the `upgrade-pg-major` drill — backup, rebuild, `nc-restore`.
+**How it works:** a code swap with the next major's *store path* plus DB/app
+migrations. Two things the drills discovered and the procedure handles:
+
+1. **chicken-and-egg**: after the code swap, `occ` cannot boot while
+   `config.php` still pins the *old store's* `apps_paths` (old-tree apps
+   crash the new core — even `occ status`). `nix run .#apply-config`
+   re-writes the nix-owned config values *without* booting occ, which is why
+   it exists as a standalone tool.
+2. **two-phase deploy**: while `needsDbUpgrade` is true, db-occ commands are
+   refused — `nextcloud-init` (which runs `db:add-missing-indices`) fails and
+   the deploy aborts mid-way. That is expected; the upgrade clears it and the
+   deploy re-runs cleanly.
+
+```bash
+# 0. third-party apps first: they must support the target major
+nix run .#occ -- app:update --all
+
+# 1. safety: full archive + deep validation BEFORE the migration
+nix run .#nc-backup -- full
+nix run .#nc-backup -- validate-deep
+
+# 2. maintenance window
+nix run .#occ -- maintenance:mode --on
+
+# 3. flip the pin in flake.nix:  nc = pkgs.nextcloud35;
+just deploy                     # may abort at init — expected (see above)
+
+# 4. de-stale the config, run the migrations
+nix run .#apply-config
+nix run .#occ -- upgrade        # can take a while; watch with -f on the second:
+                                 #   journalctl -u nextcloud-fpm -f
+nix run .#occ -- maintenance:mode --off
+
+# 5. clean re-run + verify
+just deploy
+nix run .#occ -- status         # version: 35.x, installed: true
+```
+
+**Rollback:** there is none in-place — Nextcloud DB migrations are one-way.
+The rollback is a *restore*: pin the previous nixpkgs rev, `just reset`
+(keeps repo + passfile), `just restore latest` with a pre-upgrade archive.
+This is why step 1 (full backup + validate-deep) is not optional.
+
+**Drill:** `test-docker upgrade-nc-major` — pins NC 33, deploys, seeds,
+then executes steps 3–5 verbatim and asserts version 34.0.6 with marker +
+seed file + login intact. For a two-step jump (e.g. 32 → 33 → 34 when
+catching up) run the drill machinery per step by pinning the intermediate
+nixpkgs tree.
+
+### Upgrading and the data mirror
+
+The `.trash` semantics of `just sync-data` are deliberately decoupled: a
+file deleted on the new instance (e.g. during `occ upgrade` housekeeping)
+lands in `<target>/.trash/<date>` for 30 days — the mirror can never
+amplify an upgrade mistake beyond that window.
 
 PostgreSQL major-version bumps (pin `pg = pkgs.postgresql_17` in `flake.nix`)
 need a dump/restore or `pg_upgrade` — don't just rebuild:
