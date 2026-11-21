@@ -133,7 +133,8 @@ done
 echo "[harness] vm is up (ssh -p $SSH_PORT root@127.0.0.1)"
 
 echo "[harness] copying repo into vm (/test)"
-tar -C "$REPO" --exclude='./.git' -cf - . | SSHRUN 'mkdir -p /test && tar -C /test -xf -'
+tar -C "$REPO" --exclude='./.git' --exclude='./tests/.vm-cache' --exclude='./result' \
+  -cf - . | SSHRUN 'mkdir -p /test && tar -C /test -xf -'
 
 echo "[harness] installing Nix in vm"
 if [ "$SCENARIO" = "reboot" ]; then
