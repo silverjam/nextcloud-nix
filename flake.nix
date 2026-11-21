@@ -540,9 +540,12 @@
       # ------------------------------------------------------------------
 
       occ = pkgs.writeShellScriptBin "nextcloud-occ" ''
+        # pass through password env vars for user:add/user:resetpassword
         exec /usr/bin/sudo -u ${ncUser} env \
           HOME=${ncRoot} \
           NEXTCLOUD_CONFIG_DIR=${ncConfig} \
+          OC_PASS="''${OC_PASS:-}" \
+          NC_PASS="''${NC_PASS:-}" \
           ${phpEnv}/bin/php ${nc}/occ "$@"
       '';
 

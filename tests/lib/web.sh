@@ -22,7 +22,9 @@ login_test() {
   fi
 
   code="$(curl -s -L -b "$JAR" -c "$JAR" -o "$HTML" \
-    -w '%{http_code}' --data-urlencode "user=admin" \
+    -w '%{http_code}' \
+    --header "Origin: $BASE_URL" \
+    --data-urlencode "user=admin" \
     --data-urlencode "password=$PW" \
     --data-urlencode "requesttoken=$token" \
     "$BASE_URL/login")"
