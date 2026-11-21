@@ -137,6 +137,8 @@ tar -C "$REPO" --exclude='./.git' --exclude='./tests/.vm-cache' --exclude='./res
   -cf - . | SSHRUN 'mkdir -p /test && tar -C /test -xf -'
 
 echo "[harness] installing Nix in vm"
+SSHRUN 'bash -s' < "$REPO/tests/lib/install-nix.sh"
+
 if [ "$SCENARIO" = "reboot" ]; then
   # install once, then stream the install asserts + reboot + post-reboot asserts
   STREAM1="$REPO/tests/lib/prelude.sh $REPO/tests/lib/web.sh $REPO/tests/scenarios/install.sh"
