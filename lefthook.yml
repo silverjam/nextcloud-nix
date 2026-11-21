@@ -13,7 +13,11 @@ pre-commit:
     - merge
   commands:
     flake-check:
-      run: nix flake check > /dev/null
+      run: |
+        if ! log=$(nix flake check 2>&1); then
+          echo "$log"
+          exit 1
+        fi
     shellcheck-tests:
       run: nix run nixpkgs#shellcheck -- -S error tests/*.sh tests/lib/*.sh tests/scenarios/*.sh
     just-syntax:
