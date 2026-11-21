@@ -41,7 +41,7 @@ nix run .#occ -- user:info drill2 >/dev/null 2>&1 && fail "drill2 still exists!"
 BK="$(find /var/backups/nextcloud/deprovisioned/drill2 -maxdepth 1 -mindepth 1 -type d | head -1)"
 [ -n "$BK" ] || fail "no backup dir for removed user"
 test -s "$BK/db.dump" || fail "db.dump missing/empty"
-test -f "$BK/files/provision-deleteme.txt" || fail "user files not backed up"
+test -f "$BK/home/files/provision-deleteme.txt" || fail "user home not backed up"
 grep -aq 'drill2' /var/lib/nextcloud/provision-removals.log || fail "removal not logged"
 ok "removed with verified backup: $BK"
 

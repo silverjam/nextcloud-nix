@@ -1202,9 +1202,10 @@
           install -d -m 0700 "$DEST"
           echo "provision: removing $ruid — backup first (files + db dump) into $DEST"
           if [ -d "${ncRoot}/data/$ruid" ]; then
-            cp -a "${ncRoot}/data/$ruid" "$DEST/files"
+            # complete per-user home (files/, uploads/, trash, …)
+            cp -a "${ncRoot}/data/$ruid" "$DEST/home"
           else
-            echo "provision: (no data dir for $ruid)" | tee "$DEST/files-note.txt"
+            echo "provision: (no data dir for $ruid)" | tee "$DEST/home-note.txt"
           fi
           ${pg}/bin/pg_dump --format=custom \
             --host=${dbSock} --username=${ncUser} \
