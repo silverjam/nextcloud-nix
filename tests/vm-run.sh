@@ -92,7 +92,7 @@ instance-id: nc-test-vm
 local-hostname: nextcloud-test-vm
 EOF
 "$ISO_OUT/bin/xorriso" -as mkisofs -output "$SEED" -volid cidata -joliet -rock \
-  "$CACHE/user-data-$TS.yml" "$CACHE/meta-data.yml"
+  "$ISOIN/user-data" "$ISOIN/meta-data"
 
 echo "[harness] creating boot overlay"
 "$QIMG" create -f qcow2 -b "$IMGCACHE" -F qcow2 "$DISK"
