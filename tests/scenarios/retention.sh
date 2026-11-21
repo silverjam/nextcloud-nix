@@ -20,7 +20,7 @@ RID="$(printf '%s' "$OUT" | grep -oE 'snapshot [0-9a-f]{8}' | awk '{print $2}')"
 
 step "synthesize 20 snapshots aged 30–49 days (--time backdating)"
 for i in $(seq 1 20); do
-  RT backup --time "$(date -d "-$((30 + i)) days" '+%Y-%m-%dT%H:%M:%S')" \
+  RT backup --time "$(date -d "-$((30 + i)) days" '+%Y-%m-%d %H:%M:%S')" \
     --tag nextcloud --tag retention-test /var/lib/nextcloud >/dev/null
 done
 N1="$(COUNT)"
