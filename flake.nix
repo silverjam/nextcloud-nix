@@ -716,7 +716,8 @@
             echo "nc-backup: deep validation — full pg_restore into scratch db"
             SCR="nc_verify_$(date +%s)"
             ${pg}/bin/createdb -h ${dbSock} -U ${ncUser} "$SCR"
-            if ! ${pg}/bin/pg_restore --dbname="$SCR" --jobs=2 "$DUMP"; then
+            if ! ${pg}/bin/pg_restore --host=${dbSock} --username=${ncUser} \
+                 --dbname="$SCR" --jobs=2 "$DUMP"; then
               echo "nc-backup: FAILED — dump does not fully restore" >&2
               ${pg}/bin/dropdb -h ${dbSock} -U ${ncUser} "$SCR" || true
               exit 1
@@ -838,7 +839,8 @@
         fi
 
         echo "== db: pg_restore =="
-        RU ${pg}/bin/pg_restore --dbname=nextcloud --jobs=2 "$DUMP"
+        RU ${pg}/bin/pg_restore --host=${dbSock} --username=${ncUser} \
+          --dbname=nextcloud --jobs=2 "$DUMP"
 
         echo "== files =="
         if [ -d "$SRCNC/data" ]; then
