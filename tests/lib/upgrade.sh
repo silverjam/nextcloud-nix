@@ -28,9 +28,7 @@ UPDATE_LOCK() { nix flake update nixpkgs >/dev/null; }
 NC_INSTALLED_VERSION() {
   nix run .#occ -- status | grep -oE 'versionstring: [0-9.]+' | head -1 | cut -d' ' -f2
 }
-PG_BINARY_VERSION() {
-  nix run .#postgresql -- --version | grep -oE '[0-9]+(\.[0-9]+)+' | head -1
-}
+PG_BINARY_VERSION() { nix eval --raw .#postgresql.version; }
 
 # seed instance state to protect across an upgrade: a DB marker + a data file
 SEED_INSTANCE() {
