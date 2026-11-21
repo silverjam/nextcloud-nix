@@ -1,4 +1,4 @@
-units := "nextcloud-db nextcloud-fpm nextcloud-caddy nextcloud-init nextcloud-cron.service nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer"
+units := "nextcloud-db nextcloud-fpm nextcloud-caddy nextcloud-init nextcloud-cron.service nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer nextcloud-provision.service"
 port := "55555"  # keep in sync with webPort in flake.nix
 
 # available tasks
@@ -20,6 +20,10 @@ snapshot:
 # mirror user data/ to dataSyncTarget now (hourly timer also does this)
 sync-data:
     sudo systemctl start --wait nextcloud-data-sync.service
+
+# apply provisionedUsers (declarative user creation; also runs per deploy)
+provision:
+    sudo systemctl start --wait nextcloud-provision.service
 
 # list restic snapshots (+ sizes)
 backup-list:

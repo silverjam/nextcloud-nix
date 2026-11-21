@@ -249,6 +249,76 @@ file deleted on the new instance (e.g. during `occ upgrade` housekeeping)
 lands in `<target>/.trash/<date>` for 30 days — the mirror can never
 amplify an upgrade mistake beyond that window.
 
+## Maintenance cookbook
+
+### Users — can this be done in Nix?
+
+Partially, and deliberately so. The flake owns **infrastructure and
+Nix-owned config values**; *instance content* (user files, users,
+app-store installs) is runtime state that survives deploys — the marker
+round-trip tests depend on that. Users sit in between:
+
+- **Day-to-day (recommended): imperative occ** — user files, login sessions
+  and user objects are runtime state; management commands are one-liners:
+
+```bash
+nix run .#occ -- user:add alice            # interactive password prompt
+OC_PASS='Initial-Pw-123' nix run .#occ -- user:add alice --password-from-env
+nix run .#occ -- user:list                 # all users
+nix run .#occ -- user:info alice           # detail (quota, last login…)
+OC_PASS='New-Pw-456' nix run .#occ -- user:resetpassword alice --password-from-env
+nix run .#occ -- user:setting alice files quota "2 GB"
+nix run .#occ -- group:add family
+nix run .#occ -- group:adduser family alice
+nix run .#occ -- user:disable alice
+nix run .#occ -- user:enable alice
+nix run .#occ -- user:delete alice         # ⚠ deletes the user's FILES too
+```
+
+- **Declarative provisioning (optional layer):** declare the users that
+  *should exist* in `flake.nix`; a oneshot unit applies the desired state on
+  every deploy (and `just provision` on demand):
+
+```nix
+provisionedUsers = {
+  alice = { displayName = "Alice"; quota = "2 GB"; groups = [ "family" ]; };
+  bob   = { };
+};
+```
+
+  Semantics — deliberately narrow:
+  - **creation-side only**: missing users are created with a one-shot
+    random password appended to
+    `/var/lib/nextcloud/provision-credentials-*.log` (0600) — hand it to the
+    person and have them change it;
+  - **idempotent**: quota and groups are applied to new *and* existing users;
+  - **never destructive**: removing a user from the list does nothing —
+    declarative deletion would delete their files. `user:delete` stays a
+    conscious manual step;
+  - passwords of existing users are never rotated by deploys.
+
+### Everything else worth knowing
+
+```bash
+# background jobs (Admin Settings should show "Cron … seconds ago")
+nix run .#occ -- background:cron
+
+# maintenance mode (blocks all web access; use around risky ops)
+nix run .#occ -- maintenance:mode --on
+nix run .#occ -- maintenance:mode --off
+
+# rebuild the file index when files changed out-of-band (e.g. after
+# restoring an older db next to a newer data/)
+nix run .#occ -- files:scan --all
+
+# update all apps (do this BEFORE Nextcloud major upgrades)
+nix run .#occ -- app:update --all
+nix run .#occ -- app:list
+```
+
+Bulk import: copy files into `/var/lib/nextcloud/data/<user>/files/`,
+`chown nextcloud:nextcloud`, then `files:scan --all`.
+
 PostgreSQL major-version bumps (pin `pg = pkgs.postgresql_17` in `flake.nix`)
 need a dump/restore or `pg_upgrade` — don't just rebuild:
 

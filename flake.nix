@@ -66,6 +66,28 @@
       dataSyncTarget = "${backupRoot}/data";
       dataSyncTrashDays = "30"; # deletions preserved in <target>/.trash for this many days
 
+      # Optional DECLARATIVE user provisioning (creation-side only).
+      # Users are runtime state like files — removal from this list is a
+      # no-op (never delete a user from config), and passwords of existing
+      # users are never rotated. New users get a one-shot generated password
+      # appended to /var/lib/nextcloud/provision-credentials-*.log (0600).
+      #   provisionedUsers = {
+      #     alice = { displayName = "Alice"; quota = "2 GB"; groups = [ "family" ]; };
+      #   };
+      provisionedUsers = { };
+      # rendered per-user specs: uid<TAB>display<TAB>quota<HAB>groups(;-sep)
+      provisionSpecLines = lib.mapAttrsToList
+        (name: u:
+          lib.concatStringsSep "\t" [
+            name
+            (u.displayName or "")
+            (u.quota or "")
+            (lib.concatStringsSep ";" (u.groups or [ ]))
+          ])
+        provisionedUsers;
+      provisionShellArray = lib.concatStringsSep " "
+        (map lib.escapeShellArg provisionSpecLines);
+
       # ------------------------------------------------------------------
       # Names & paths (single source of truth for units, Caddyfile, scripts)
       # ------------------------------------------------------------------
@@ -602,6 +624,7 @@
         install -m 0644 ${snapshotTimer} ${unitDir}/nextcloud-snapshot.timer
         install -m 0644 ${dataSyncService} ${unitDir}/nextcloud-data-sync.service
         install -m 0644 ${dataSyncTimer} ${unitDir}/nextcloud-data-sync.timer
+        install -m 0644 ${provisionService} ${unitDir}/nextcloud-provision.service
 
         echo "== backup roots =="
         install -d -o ${ncUser} -g ${ncUser} -m 0700 \
@@ -638,6 +661,7 @@
         if [ -n "${dataSyncTarget}" ]; then
           systemctl restart nextcloud-data-sync.timer
         fi
+        systemctl restart nextcloud-provision.service
 
         if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
           if ! ufw status | grep -q "${webPort}/tcp"; then
@@ -1097,6 +1121,90 @@
         WantedBy=timers.target
       '';
 
+      # ------------------------------------------------------------------
+      # declarative user provisioning (creation-side; see provisionedUsers)
+      # ------------------------------------------------------------------
+      ncProvisionJob = pkgs.writeShellScriptBin "nc-provision" ''
+        set -euo pipefail
+        export PATH="/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+        # run as the nextcloud user, like the other jobs
+        ME="$(id -un)"
+        if [ "$ME" != "${ncUser}" ]; then
+          if [ "$(id -u)" = "0" ]; then
+            exec ${pkgs.util-linux}/bin/runuser -u ${ncUser} -- "$0" "$@"
+          else
+            exec sudo -u ${ncUser} env HOME=${ncRoot} "$0" "$@"
+          fi
+        fi
+        export HOME=${ncRoot}
+
+        SPECS=( ${provisionShellArray} )
+        if [ "''${#SPECS[@]}" -eq 0 ]; then
+          echo "provision: no users configured — nothing to do"
+          exit 0
+        fi
+
+        OCC() { ${phpEnv}/bin/php ${nc}/occ "$@"; }
+        CRED="${ncRoot}/provision-credentials-$(date +%Y%m%d-%H%M%S).log"
+        touch "$CRED"
+        chmod 0600 "$CRED"
+        NEW=0
+
+        for raw in "''${SPECS[@]}"; do
+          IFS=$'\t' read -r uid display quota groups <<< "$raw"
+          if OCC user:info "$uid" >/dev/null 2>&1; then
+            echo "provision: $uid exists — applying desired quota/groups"
+          else
+            PW="$(${pkgs.openssl}/bin/openssl rand -hex 18)"
+            export OC_PASS="$PW"
+            if [ -n "$display" ]; then
+              OCC user:add "$uid" --password-from-env --display-name "$display" >/dev/null
+            else
+              OCC user:add "$uid" --password-from-env >/dev/null
+            fi
+            unset OC_PASS
+            printf 'uid=%s password=%s (created %s)\n' "$uid" "$PW" "$(date -u)" >> "$CRED"
+            NEW=$((NEW + 1))
+            echo "provision: created $uid — password appended to $CRED"
+          fi
+          [ -n "$quota" ] && OCC user:setting "$uid" files quota "$quota"
+          if [ -n "$groups" ]; then
+            IFS=';' read -ra GS <<< "$groups"
+            for g in "''${GS[@]}"; do
+              OCC group:add "$g" >/dev/null 2>&1 || true
+              OCC group:adduser "$g" "$uid" >/dev/null 2>&1 || true
+            done
+          fi
+        done
+        chmod 0600 "$CRED"
+        echo "provision: done ($NEW created, $(( ''${#SPECS[@]} - NEW )) already existed)"
+      '';
+
+      provisionService = pkgs.writeText "nextcloud-provision.service" ''
+        [Unit]
+        Description=Nextcloud declarative user provisioning (Nix-managed)
+        After=nextcloud-init.service
+        Requires=nextcloud-init.service
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=true
+        User=${ncUser}
+        Group=${ncUser}
+        UMask=0077
+        Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
+        Environment="PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        ExecStart=${ncProvisionJob}/bin/nc-provision
+        TimeoutStartSec=10min
+        NoNewPrivileges=true
+        PrivateTmp=true
+        ProtectSystem=strict
+        ProtectHome=true
+        ReadWritePaths=${ncRoot}
+        RestrictAddressFamilies=AF_UNIX
+      '';
+
       dataSyncService = pkgs.writeText "nextcloud-data-sync.service" ''
         [Unit]
         Description=Nextcloud user-data mirror — rsync data/ to dataSyncTarget (Nix-managed)
@@ -1136,6 +1244,7 @@
         "nc-backup" = ncBackupJob;
         "nc-restore" = ncRestoreJob;
         "nc-data-sync" = ncDataSyncJob;
+        "nc-provision" = ncProvisionJob;
         nextcloud = nc;
         php = phpEnv;
         postgresql = pg;
