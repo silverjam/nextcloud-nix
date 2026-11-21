@@ -55,7 +55,7 @@ docker run -d --privileged --name "$C" \
 # NOTE: the repo is docker-cp'd into the container (not bind-mounted): nix's
 # libgit2 refuses git repos owned by another uid, and cp preserves host uids —
 # so the copy is chowned to root afterwards.
-mkdir -p /test
+docker exec "$C" mkdir -p /test
 docker cp "$REPO/." "$C:/test/" >/dev/null
 docker exec "$C" chown -R root:root /test
 
