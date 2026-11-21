@@ -53,9 +53,11 @@ docker run -d --privileged --name "$C" \
   "$BASE_IMG" /sbin/init >/dev/null
 
 # NOTE: the repo is docker-cp'd into the container (not bind-mounted): nix's
-# libgit2 refuses git repos owned by another uid, and a copy also lets the
-# container own its flake state entirely.
+# libgit2 refuses git repos owned by another uid, and cp preserves host uids —
+# so the copy is chowned to root afterwards.
+mkdir -p /test
 docker cp "$REPO/." "$C:/test/" >/dev/null
+docker exec "$C" chown -R root:root /test
 
 echo "[harness] waiting for container systemd"
 systemd_up=""
