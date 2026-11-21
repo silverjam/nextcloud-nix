@@ -245,6 +245,16 @@ repos are format-compatible; `just backup-list` works identically remote.
   host's, so unit names, ports and `/var/lib` cannot collide with production.
   `NC_TEST_KEEP=1 just test-docker ...` keeps the container for debugging;
   `NC_TEST_REBUILD=1` refreshes the systemd base image.
+- **Backup/restore drills** (run on either harness): `backup-drill`
+  (DB marker planted → snapshot → mutated → restored → assert the marker
+  *rolled back*; maintenance-mode hygiene; no scratch DBs left; restic
+  `check`), `mirror-drill` (`.trash` deletion preservation + copy-back
+  recovery + 30-day aging + flock overlap guard), `restore-fresh`
+  (`reset` wipes the instance → restore from the surviving repo → admin
+  password, DB marker and login all return), `retention` (101 snapshots
+  saturating restic's hourly buckets → `forget --prune` deletes 96, the live
+  snapshot survives and still validates — documents that restic's `keep-*`
+  count distinct buckets, not sliding time windows).
 - **Layer C (VM harness):** `just test-vm` — a real Ubuntu 26.04 VM
   (qemu/KVM + cloud-init, disposable qcow2 overlay per run on a cached cloud
   image) running the *same* scenario scripts over ssh. Adds what containers
