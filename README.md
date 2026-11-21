@@ -58,7 +58,9 @@ just dump                  # write state + failing-unit detail + journal to ./lo
 
 `just dump` writes exactly the file worth attaching when reporting "start failed".
 
-**Pre-commit checks** (`lefthook`): every `git commit` runs `nix flake check`,
+**Pre-commit checks** (lefthook): run once per machine `just hooks-install`
+(binary into your nix profile) and once per clone `just hooks-setup`. Every
+`git commit` then runs `nix flake check` (output only on failure),
 shellcheck over `tests/`, and justfile syntax (≈4s once the store is warm).
 Escape hatches: `git commit --no-verify` or `LEFTHOOK=0 git commit …`.
 Hook auto-skips during rebase/merge. Note the check evaluates the working

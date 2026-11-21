@@ -50,6 +50,16 @@ restore *args:
 test-docker scenario="install":
     tests/docker-run.sh {{ scenario }}
 
+# install the lefthook binary (nix profile; idempotent up/downgrades)
+hooks-install:
+    nix profile add nixpkgs#lefthook
+
+# wire the pre-commit hook into this repo's .git (run after each fresh clone;
+# needs the lefthook binary — run `just hooks-install` once per machine)
+hooks-setup:
+    nix run nixpkgs#lefthook -- install
+    test -f .git/hooks/pre-commit && echo "pre-commit hook wired — next commit runs flake-check + shellcheck + just-syntax"
+
 # mirror overview: sizes, file counts, last syncs, preserved deletions
 mirror-list:
     nix run .#nc-data-sync -- status
