@@ -16,8 +16,13 @@ nix run .#nc-backup -- validate-deep
 ok "snapshot saved + deep-validated"
 
 step "maintenance mode is OFF after backup (trap guarantee)"
-M="$(nix run .#occ -- config:system:get maintenance | tr -d '[:space:]')"
-expect_equal "false" "$M" "maintenance mode clean"
+# the key is only written when mode was toggled at least once — treat
+# unset (empty) and false as OFF
+M="$(nix run .#occ -- config:system:get maintenance 2>/dev/null | tr -d '[:space:]')"
+case "$M" in
+  ""|false) ok "maintenance mode clean" ;;
+  *) fail "maintenance mode ON after backup (got: '$M')" ;;
+esac
 
 step "validate-deep left no scratch databases behind"
 C="$(PSQL -tAc "SELECT count(*) FROM pg_database WHERE datname LIKE 'nc_verify_%'")"
