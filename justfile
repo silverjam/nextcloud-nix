@@ -45,6 +45,11 @@ backup-prune:
 restore *args:
     nix run .#nc-restore -- {{ args }}
 
+# layer-A test harness: full lifecycle in a disposable systemd container
+# (safe next to production — separate systemd instance). Scenarios: install | full | reset
+test-docker scenario="install":
+    tests/docker-run.sh {{ scenario }}
+
 # mirror overview: sizes, file counts, last syncs, preserved deletions
 mirror-list:
     nix run .#nc-data-sync -- status

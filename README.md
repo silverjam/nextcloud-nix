@@ -218,6 +218,27 @@ copy `/var/backups/nextcloud` over, then `just restore <id>`.
 Off-box later: point `RESTIC_REPOSITORY` at an ssh/S3 target in the flake —
 repos are format-compatible; `just backup-list` works identically remote.
 
+## Testing
+
+- **Layer F (static, always):** `nix flake check` — Caddyfile validation, PHP
+  env + extension assertions, `shellcheck -S error` over every generated
+  script, PHP lint of the config writer. Unit-file verification (`systemd-analyze
+  verify`) runs inside the container harness, where Ubuntu's systemd matches
+  production.
+- **Layer A (container harness):** `just test-docker` — boots Ubuntu 26.04 with
+  real systemd as PID 1 in a privileged container, installs multi-user Nix
+  (cached in the `nc-test-nix` volume), mounts this repo read-only, and runs
+  `nix run .#deploy` there. Scenarios: `install` (fresh deploy + units +
+  `status.php` + real CSRF login), `full` (seed file via data dir + scan,
+  db/app-state snapshot + `validate-deep`, corrupt config.php → `restore`
+  roundtrip with `data/` untouched, post-restore login), `reset`
+  (`just reset` determinism). The container's systemd is separate from the
+  host's, so unit names, ports and `/var/lib` cannot collide with production.
+  `NC_TEST_KEEP=1 just test-docker ...` keeps the container for debugging;
+  `NC_TEST_REBUILD=1` refreshes the systemd base image.
+- **Layer C (planned):** QEMU + cloud-init Ubuntu VM for cold boots, reboots,
+  the nixpkgs-upgrade matrix and real tailscale.
+
 ## Full reset (deletes all instance data)
 
 ```bash

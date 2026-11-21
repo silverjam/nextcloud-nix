@@ -286,7 +286,7 @@
         StateDirectory=nextcloud
         ExecStartPre=${phpEnv}/bin/php-fpm --test --fpm-config ${phpFpmConf}
         ExecStart=${phpEnv}/bin/php-fpm --fpm-config ${phpFpmConf}
-        ExecReload=/bin/kill -USR2 $MAINPID
+        ExecReload=${pkgs.coreutils}/bin/kill -USR2 $MAINPID
         Restart=on-failure
         RestartSec=3
         NoNewPrivileges=true
@@ -577,6 +577,9 @@
         echo "== backup roots =="
         install -d -o ${ncUser} -g ${ncUser} -m 0700 \
           ${backupRoot} ${resticRepo} ${stashRoot}
+        # Nix bakes dataSyncTarget at eval time — shellcheck sees literals
+        # where these guard the "disabled" knob (empty string).
+        # shellcheck disable=SC2157
         if [ -n "${dataSyncTarget}" ]; then
           install -d -o ${ncUser} -g ${ncUser} -m 0700 ${dataSyncTarget}
         fi
@@ -591,6 +594,7 @@
           nextcloud-backup.timer \
           nextcloud-snapshot.timer \
           nextcloud-cron.timer
+        # shellcheck disable=SC2157
         if [ -n "${dataSyncTarget}" ]; then
           systemctl enable --now nextcloud-data-sync.timer
         fi
@@ -601,6 +605,7 @@
         systemctl restart nextcloud-caddy.service
         systemctl restart nextcloud-init.service
         systemctl restart nextcloud-backup.timer nextcloud-snapshot.timer
+        # shellcheck disable=SC2157
         if [ -n "${dataSyncTarget}" ]; then
           systemctl restart nextcloud-data-sync.timer
         fi
@@ -870,6 +875,9 @@
           *) echo "usage: nc-data-sync [sync|status|compare-quick|compare-deep]" >&2; exit 64 ;;
         esac
 
+        # Nix bakes dataSyncTarget at eval time — shellcheck sees a literal
+        # where this guards the "disabled" knob (empty string).
+        # shellcheck disable=SC2157
         if [ -z "${dataSyncTarget}" ]; then
           echo "data-sync: dataSyncTarget not configured — nothing to do"
           exit 0
@@ -928,7 +936,7 @@
             echo "== deep compare: rsync --dry-run --itemize-changes =="
             set +e
             RS_OUT="$(${pkgs.rsync}/bin/rsync -a -n --itemize-changes --delete \
-              ''${EXCLUDES[@]} --exclude '/.trash' \
+              "''${EXCLUDES[@]}" --exclude '/.trash' \
               ${ncRoot}/data/ ${dataSyncTarget}/ 2>&1)"
             set -e
             COUNT="$(printf '%s\n' "$RS_OUT" | grep -cE '^([<c>][fs.]|\*deleting)' || true)"
@@ -955,7 +963,7 @@
             --delete \
             --backup --backup-dir="$DELS/" \
             --exclude '/.trash' \
-            ''${EXCLUDES[@]} \
+            "''${EXCLUDES[@]}" \
             ${ncRoot}/data/ ${dataSyncTarget}/
         rc=$?
         set -e
@@ -1120,6 +1128,36 @@
         phpenv = pkgs.runCommand "phpenv-built" { } ''
           ${phpEnv}/bin/php -v > $out
           grep -q pdo_pgsql <(${phpEnv}/bin/php -m)
+        '';
+        # F layer: unit-file verification moved to the Docker harness (tests/)
+        # — sandboxed systemd-analyze insists on /run/systemd, and running it
+        # inside the container against Ubuntu's systemd is more faithful.
+        # F layer: shellcheck every generated bash script
+        scriptsLint =
+          pkgs.runCommand
+            "scripts-shellcheck"
+            {
+              nativeBuildInputs = [ pkgs.shellcheck ];
+            }
+            ''
+              shellcheck -S error \
+                "${deploy}/bin/nextcloud-deploy" \
+                "${occ}/bin/nextcloud-occ" \
+                "${ncBackupJob}/bin/nc-backup" \
+                "${ncRestoreJob}/bin/nc-restore" \
+                "${ncDataSyncJob}/bin/nc-data-sync" \
+                ${dbInit} \
+                ${dbReady} \
+                ${initScript}
+              touch $out
+            '';
+        # F layer: the generated PHP config-writer must parse
+        applyConfigLint = pkgs.runCommand "applyconfig-php-lint" {
+          nativeBuildInputs = [ phpEnv ];
+        } ''
+          ${phpEnv}/bin/php -l ${applyConfig} | tee lint.txt
+          grep -q "No syntax errors" lint.txt
+          touch $out
         '';
       };
     };
