@@ -1,0 +1,6 @@
+# nix build outputs
+/result
+/result-*
+
+# just dump output (journal bundle written by `just dump`)
+/log
