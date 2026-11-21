@@ -59,6 +59,7 @@ for p in $(seq 2222 2231); do
 done
 [ -n "$SSH_PORT" ] || { echo "no free ssh port 2222-2231" >&2; exit 1; }
 SSH_OPTS=(-p "$SSH_PORT"
+  -i "$KEY" -o IdentitiesOnly=yes
   -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
   -o ConnectTimeout=5 -o LogLevel=ERROR)
 SSHRUN() { ssh "${SSH_OPTS[@]}" root@127.0.0.1 "$@"; }
