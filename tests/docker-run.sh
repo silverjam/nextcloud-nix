@@ -13,8 +13,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SCENARIO="${1:-install}"
-case "$SCENARIO" in install|full|reset|backup-drill|mirror-drill|restore-fresh|retention) ;;
-  *) echo "usage: tests/docker-run.sh [install|full|reset|backup-drill|mirror-drill|restore-fresh|retention]" >&2; exit 64 ;;
+case "$SCENARIO" in install|full|reset|reboot|backup-drill|mirror-drill|restore-fresh|retention|upgrade-nc-major|upgrade-nc-minor|upgrade-pg-major|upgrade-pg-minor) ;;
+  *) echo "usage: tests/docker-run.sh [install|full|reset|reboot|backup-drill|mirror-drill|restore-fresh|retention|upgrade-*]" >&2; exit 64 ;;
 esac
 command -v docker >/dev/null || { echo "docker not available" >&2; exit 1; }
 
