@@ -35,10 +35,9 @@ mkdir -p "$CACHE"
 
 # --- host tools from nix (qemu for boot + images, genisoimage for the seed)
 QEMU_OUT="$(nix build nixpkgs#qemu_kvm --no-link --print-out-paths | tail -1)"
-ISO_OUT="$(nix build nixpkgs#genisoimage --no-link --print-out-paths | tail -1)"
+ISO_OUT="$(nix build nixpkgs#xorriso --no-link --print-out-paths | tail -1)"
 QIMG="$QEMU_OUT/bin/qemu-img"
 QEMU="$QEMU_OUT/bin/qemu-system-x86_64"
-GENISO="$ISO_OUT/bin/genisoimage"
 
 cleanup() {
   if [ "${NC_TEST_KEEP:-0}" = "1" ] && [ -f "$PIDFILE" ]; then
@@ -88,7 +87,7 @@ cat > "$CACHE/meta-data.yml" <<EOF
 instance-id: nc-test-vm
 local-hostname: nextcloud-test-vm
 EOF
-"$GENISO" -output "$SEED" -volid cidata -joliet -rock \
+"$ISO_OUT/bin/xorriso" -as mkisofs -output "$SEED" -volid cidata -joliet -rock \
   "$CACHE/user-data-$TS.yml" "$CACHE/meta-data.yml"
 
 echo "[harness] creating boot overlay"
