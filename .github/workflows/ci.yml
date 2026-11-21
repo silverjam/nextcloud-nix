@@ -9,8 +9,10 @@
 #                  - justfile syntax
 #   docker-tests : tests/docker-run.sh <scenario> — the REAL deploy against a
 #                  systemd container (privileged; hosted runners allow it).
-#                  Push/PR runs the fast `install` scenario; heavier drills
-#                  selectable via manual dispatch.
+#                  Push/PR runs the whole container suite as parallel matrix
+#                  jobs — every scenario except `reboot`, which only the VM
+#                  harness can do. Manual dispatch: toggle "run_docker" and
+#                  pick one scenario (or `all` for the whole matrix).
 #   vm-tests     : tests/vm-run.sh <scenario> — the same deploy in a REAL
 #                  Ubuntu VM under qemu/KVM (KVM is available on hosted x64
 #                  runners; the harness falls back to TCG emulation if not).
@@ -26,20 +28,20 @@ on:
   workflow_dispatch:
     inputs:
       run_docker:
-        description: Run docker test
+        description: Run docker test (manual dispatch)
         required: false
-        default: true
+        default: false
         type: boolean
       docker_scenario:
-        description: Docker scenario
+        description: Docker scenario ('all' = the full PR matrix)
         required: false
         default: install
         type: choice
         options:
+          - all
           - install
           - full
           - reset
-          - reboot
           - backup-drill
           - mirror-drill
           - restore-fresh
@@ -49,7 +51,7 @@ on:
           - upgrade-pg-major
           - upgrade-pg-minor
       run_vm:
-        description: Run VM test
+        description: Run docker-equivalent scenario in a VM
         required: false
         default: false
         type: boolean
@@ -113,15 +115,38 @@ jobs:
         run: nix run nixpkgs#just -- --justfile justfile --list > /dev/null
 
   docker-tests:
-    name: docker (systemd) — ${{ inputs.docker_scenario || 'install' }}
+    name: docker (systemd) — ${{ matrix.scenario }}
     if: github.event_name != 'workflow_dispatch' || inputs.run_docker
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
+    strategy:
+      # every scenario is an independent disposable container lifecycle that
+      # installs the stack itself — no ordering between them
+      fail-fast: false
+      matrix:
+        scenario:
+          - install
+          - full
+          - reset
+          - backup-drill
+          - mirror-drill
+          - restore-fresh
+          - retention
+          - upgrade-nc-major
+          - upgrade-nc-minor
+          - upgrade-pg-major
+          - upgrade-pg-minor
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run docker scenario
-        run: tests/docker-run.sh "${{ inputs.docker_scenario || 'install' }}"
+      # on workflow_dispatch, run only the picked scenario ('all' = the matrix)
+
+      - name: Run container scenario
+        if: >-
+          github.event_name != 'workflow_dispatch'
+          || inputs.docker_scenario == 'all'
+          || inputs.docker_scenario == matrix.scenario
+        run: tests/docker-run.sh "${{ matrix.scenario }}"
 
   vm-tests:
     name: VM (qemu/kvm) — ${{ inputs.vm_scenario || 'install' }}
@@ -138,6 +163,7 @@ jobs:
             access-tokens = github.com=${{ github.token }}
 
       - name: Cache Nix store
+        # shares the warm store with the check job (qemu, xorriso, …)
         uses: actions/cache@v4
         with:
           path: /nix/store
