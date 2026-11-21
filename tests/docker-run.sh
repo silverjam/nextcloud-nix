@@ -76,10 +76,20 @@ echo "[harness] installing Nix"
 docker exec -i "$C" bash -s < "$REPO/tests/lib/install-nix.sh"
 
 echo "[harness] running scenario: $SCENARIO"
+set +e
 docker exec -i "$C" bash -s < <(
   cat "$REPO/tests/lib/prelude.sh" "$REPO/tests/lib/web.sh" \
       "$REPO/tests/lib/upgrade.sh" "$REPO/tests/scenarios/$SCENARIO.sh"
 )
+rc=$?
+set -e
+if [ "$rc" -ne 0 ]; then
+  echo "[harness] scenario failed (rc=$rc) — journal dump (init/provision/db):"
+  docker exec "$C" bash -c \
+    'journalctl -u nextcloud-init -u nextcloud-provision -u nextcloud-db -q --no-pager -o cat | tail -n 25' \
+    2>/dev/null | sed 's/^/  | /' || true
+  exit "$rc"
+fi
 
 echo
 echo "[harness] ✔ scenario '$SCENARIO' passed"
