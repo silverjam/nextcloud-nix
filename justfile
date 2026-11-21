@@ -45,12 +45,12 @@ backup-prune:
 restore *args:
     nix run .#nc-restore -- {{ args }}
 
-# layer-A test harness: full lifecycle in a disposable systemd container
+# container test harness: full lifecycle in a disposable systemd container
 # (safe next to production — separate systemd instance). Scenarios: install | full | reset
 test-docker scenario="install":
     tests/docker-run.sh {{ scenario }}
 
-# layer-C harness: REAL Ubuntu VM (qemu/kvm + cloud-init) — cold boot, reboot
+# vm test harness: REAL Ubuntu VM (qemu/kvm + cloud-init) — cold boot, reboot
 # persistence, same scenarios + reboot. First run downloads ~1GB cloud image.
 test-vm scenario="install":
     tests/vm-run.sh {{ scenario }}

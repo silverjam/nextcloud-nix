@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Layer-C test harness: a REAL Ubuntu VM — qemu/KVM + cloud-init.
+# VM test harness: a REAL Ubuntu VM — qemu/KVM + cloud-init.
 #
 # Reuses the docker harness assets (tests/lib/*, tests/scenarios/*): the
 # scripts are environment-agnostic and are streamed over ssh instead of

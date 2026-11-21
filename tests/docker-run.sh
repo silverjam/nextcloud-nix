@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Layer-A test harness: Ubuntu 26.04 container with real systemd as PID 1,
+# Container test harness: Ubuntu 26.04 container with real systemd as PID 1,
 # multi-user Nix (cached in a docker volume), running the REAL deployment
 # against the repo mounted at /test.
 #

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Streamed into the VM after a reboot cycle (layer-C only).
+# Streamed into the VM after a reboot cycle (VM harness only).
 # Asserts everything that must survive a power cycle: unit enablement,
 # persistent timers, instance state, working login.
 step "post-reboot: units active"

@@ -1,5 +1,7 @@
 # Nextcloud via Nix — PostgreSQL + PHP-FPM + Caddy
 
+[![CI](https://github.com/silverjam/nextcloud-nix/actions/workflows/ci.yml/badge.svg)](https://github.com/silverjam/nextcloud-nix/actions/workflows/ci.yml)
+
 A Nix-deployed personal Nextcloud for this Ubuntu host. **No containers, no NixOS** —
 Nix builds every binary/config (PHP with extensions, PostgreSQL, Nextcloud itself,
 Caddy) into the immutable store, and plain systemd units run them.
@@ -229,12 +231,12 @@ repos are format-compatible; `just backup-list` works identically remote.
 
 ## Testing
 
-- **Layer F (static, always):** `nix flake check` — Caddyfile validation, PHP
-  env + extension assertions, `shellcheck -S error` over every generated
-  script, PHP lint of the config writer. Unit-file verification (`systemd-analyze
-  verify`) runs inside the container harness, where Ubuntu's systemd matches
-  production.
-- **Layer A (container harness):** `just test-docker` — boots Ubuntu 26.04 with
+- **Static checks (always, every commit):** `nix flake check` — Caddyfile
+  validation, PHP env + extension assertions, `shellcheck -S error` over every
+  generated script, PHP lint of the config writer. Unit-file verification
+  (`systemd-analyze verify`) runs inside the container harness, where Ubuntu's
+  systemd matches production.
+- **Container harness:** `just test-docker` — boots Ubuntu 26.04 with
   real systemd as PID 1 in a privileged container, installs multi-user Nix
   (cached in the `nc-test-nix` volume), mounts this repo read-only, and runs
   `nix run .#deploy` there. Scenarios: `install` (fresh deploy + units +
@@ -255,7 +257,7 @@ repos are format-compatible; `just backup-list` works identically remote.
   saturating restic's hourly buckets → `forget --prune` deletes 96, the live
   snapshot survives and still validates — documents that restic's `keep-*`
   count distinct buckets, not sliding time windows).
-- **Layer C (VM harness):** `just test-vm` — a real Ubuntu 26.04 VM
+- **VM harness:** `just test-vm` — a real Ubuntu 26.04 VM
   (qemu/KVM + cloud-init, disposable qcow2 overlay per run on a cached cloud
   image) running the *same* scenario scripts over ssh. Adds what containers
   can't cover: cold boot, **reboot persistence** (scenario `reboot` asserts

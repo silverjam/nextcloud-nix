@@ -1,0 +1,200 @@
+# GitHub Actions CI — mirrors the lefthook pre-commit checks and adds the
+# container + VM test harnesses.
+#
+#   check        : the pre-commit set on a hosted Nix runner (fast)
+#                  - nix flake check   (caddy validate, phpenv build,
+#                                       shellcheck of generated scripts,
+#                                       apply-config php lint)
+#                  - shellcheck over tests/
+#                  - justfile syntax
+#   docker-tests : tests/docker-run.sh <scenario> — the REAL deploy against a
+#                  systemd container (privileged; hosted runners allow it).
+#                  Push/PR runs the whole container suite as parallel matrix
+#                  jobs — every scenario except `reboot`, which only the VM
+#                  harness can do. Manual dispatch: toggle "run_docker" and
+#                  pick one scenario (or `all` for the whole matrix).
+#   vm-tests     : tests/vm-run.sh <scenario> — the same deploy in a REAL
+#                  Ubuntu VM under qemu/KVM (KVM is available on hosted x64
+#                  runners; the harness falls back to TCG emulation if not).
+#                  Not run on push/PR — launch via workflow_dispatch and tick
+#                  "run_vm" (+ pick a scenario, e.g. reboot for persistence
+#                  asserts that containers cannot cover).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      run_docker:
+        description: Run docker test (manual dispatch)
+        required: false
+        default: false
+        type: boolean
+      docker_scenario:
+        description: Docker scenario ('all' = the full PR matrix)
+        required: false
+        default: install
+        type: choice
+        options:
+          - all
+          - install
+          - full
+          - reset
+          - backup-drill
+          - mirror-drill
+          - restore-fresh
+          - retention
+          - upgrade-nc-major
+          - upgrade-nc-minor
+          - upgrade-pg-major
+          - upgrade-pg-minor
+      run_vm:
+        description: Run docker-equivalent scenario in a VM
+        required: false
+        default: false
+        type: boolean
+      vm_scenario:
+        description: VM scenario
+        required: false
+        default: install
+        type: choice
+        options:
+          - install
+          - full
+          - reset
+          - reboot
+          - backup-drill
+          - mirror-drill
+          - restore-fresh
+          - retention
+          - upgrade-nc-major
+          - upgrade-nc-minor
+          - upgrade-pg-major
+          - upgrade-pg-minor
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: flake check + lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          # github tarball flakes (nixpkgs input) without API rate limits
+          extra_nix_config: |
+            access-tokens = github.com=${{ github.token }}
+
+      - name: Cache Nix store
+        uses: actions/cache@v4
+        with:
+          path: /nix/store
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: |
+            nix-${{ runner.os }}-
+
+      # same three checks as the lefthook pre-commit (lefthook.yml)
+      - name: nix flake check
+        run: nix flake check -L --show-trace
+
+      - name: shellcheck tests/
+        run: nix run nixpkgs#shellcheck -- -S error tests/*.sh tests/lib/*.sh tests/scenarios/*.sh
+
+      - name: justfile syntax
+        run: nix run nixpkgs#just -- --justfile justfile --list > /dev/null
+
+  docker-tests:
+    name: docker (systemd) — ${{ matrix.scenario }}
+    if: github.event_name != 'workflow_dispatch' || inputs.run_docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      # every scenario is an independent disposable container lifecycle that
+      # installs the stack itself — no ordering between them
+      fail-fast: false
+      matrix:
+        scenario:
+          - install
+          - full
+          - reset
+          - backup-drill
+          - mirror-drill
+          - restore-fresh
+          - retention
+          - upgrade-nc-major
+          - upgrade-nc-minor
+          - upgrade-pg-major
+          - upgrade-pg-minor
+    steps:
+      - uses: actions/checkout@v4
+
+      # on workflow_dispatch, run only the picked scenario ('all' = the matrix)
+
+      - name: Run container scenario
+        if: >-
+          github.event_name != 'workflow_dispatch'
+          || inputs.docker_scenario == 'all'
+          || inputs.docker_scenario == matrix.scenario
+        run: tests/docker-run.sh "${{ matrix.scenario }}"
+
+  vm-tests:
+    name: VM (qemu/kvm) — ${{ inputs.vm_scenario || 'install' }}
+    if: github.event_name == 'workflow_dispatch' && inputs.run_vm
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            access-tokens = github.com=${{ github.token }}
+
+      - name: Cache Nix store
+        # shares the warm store with the check job (qemu, xorriso, …)
+        uses: actions/cache@v4
+        with:
+          path: /nix/store
+          key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-keys: |
+            nix-${{ runner.os }}-
+
+      # harness uses accel=kvm when /dev/kvm is writable, accel=tcg otherwise
+      # (TCG = software emulation — works but much slower)
+      - name: KVM availability
+        run: |
+          if [ -w /dev/kvm ]; then
+            echo "KVM available — qemu will use hardware acceleration"
+          else
+            echo "WARNING: /dev/kvm missing or not writable — qemu falls back to TCG" >&2
+          fi
+          ls -l /dev/kvm || true
+
+      # ~1GB Ubuntu 26.04 cloud image, cached per ISO week; overlay/seed files
+      # are cleaned up by the harness, the base image is what's worth keeping
+      - name: Weekly image cache key
+        id: imgkey
+        run: echo "bucket=$(date -u +%Y-%m-%W)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache cloud image
+        uses: actions/cache@v4
+        with:
+          path: tests/.vm-cache
+          key: vm-img-${{ steps.imgkey.outputs.bucket }}
+          restore-keys: |
+            vm-img-
+
+      - name: Run VM scenario
+        run: tests/vm-run.sh "${{ inputs.vm_scenario || 'install' }}"

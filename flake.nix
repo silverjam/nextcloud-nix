@@ -486,6 +486,13 @@
 
         RUNOCC() { ${phpEnv}/bin/php ${nc}/occ "$@"; }
 
+        # Apply nix-owned config values BEFORE any occ call. After an
+        # NC major swap, occ cannot even boot while config.php still pins
+        # the old store's apps_paths (old-tree apps crash the new core).
+        # On a first install there is no config.php yet — skip silently.
+        ${phpEnv}/bin/php ${applyConfig} 2>&1 \
+          || echo "  (apply-config skipped — no config.php yet)"
+
         # --- first-time installation (idempotent) ---
         if ! RUNOCC status 2>/dev/null | grep -q 'installed: true'; then
           echo "nextcloud-init: first-time install (may take a couple of minutes)"
@@ -529,7 +536,10 @@
         RUNOCC config:system:set maintenance_window_start --type integer --value 2
 
         # --- tidy up indexes the install may skip ---
-        RUNOCC db:add-missing-indices
+        # during a NC major upgrade window (needsDbUpgrade) db-occ commands
+        # are refused — that is expected and cleared by `occ upgrade`
+        RUNOCC db:add-missing-indices 2>/dev/null \
+          || echo "  (db:add-missing-indices postponed — db pending occ upgrade)"
 
         RUNOCC status
         echo "nextcloud-init: done"
@@ -547,6 +557,15 @@
           OC_PASS="''${OC_PASS:-}" \
           NC_PASS="''${NC_PASS:-}" \
           ${phpEnv}/bin/php ${nc}/occ "$@"
+      '';
+
+      # standalone config re-applier — pure php (no occ boot), so it works
+      # even when config.php pins a stale apps_paths (post-major-swap rescue)
+      applyConfigTool = pkgs.writeShellScriptBin "nextcloud-apply-config" ''
+        exec /usr/bin/sudo -u ${ncUser} env \
+          HOME=${ncRoot} \
+          NEXTCLOUD_CONFIG_DIR=${ncConfig} \
+          ${phpEnv}/bin/php ${applyConfig} "$@"
       '';
 
       deploy = pkgs.writeShellScriptBin "nextcloud-deploy" ''
@@ -1108,6 +1127,7 @@
     {
       packages.${system} = {
         inherit occ deploy;
+        "apply-config" = applyConfigTool;
         "nc-backup" = ncBackupJob;
         "nc-restore" = ncRestoreJob;
         "nc-data-sync" = ncDataSyncJob;
@@ -1141,10 +1161,10 @@
           ${phpEnv}/bin/php -v > $out
           grep -q pdo_pgsql <(${phpEnv}/bin/php -m)
         '';
-        # F layer: unit-file verification moved to the Docker harness (tests/)
+        # unit-file verification moved to the container harness (tests/)
         # — sandboxed systemd-analyze insists on /run/systemd, and running it
         # inside the container against Ubuntu's systemd is more faithful.
-        # F layer: shellcheck every generated bash script
+        # shellcheck every generated bash script
         scriptsLint =
           pkgs.runCommand
             "scripts-shellcheck"
@@ -1163,7 +1183,7 @@
                 ${initScript}
               touch $out
             '';
-        # F layer: the generated PHP config-writer must parse
+        # the generated PHP config-writer must parse
         applyConfigLint = pkgs.runCommand "applyconfig-php-lint" {
           nativeBuildInputs = [ phpEnv ];
         } ''
