@@ -489,8 +489,9 @@
         # Apply nix-owned config values BEFORE any occ call. After an
         # NC major swap, occ cannot even boot while config.php still pins
         # the old store's apps_paths (old-tree apps crash the new core).
-        # This is the de-chicken-and-egg step.
-        ${phpEnv}/bin/php ${applyConfig}
+        # On a first install there is no config.php yet — skip silently.
+        ${phpEnv}/bin/php ${applyConfig} 2>&1 \
+          || echo "  (apply-config skipped — no config.php yet)"
 
         # --- first-time installation (idempotent) ---
         if ! RUNOCC status 2>/dev/null | grep -q 'installed: true'; then
