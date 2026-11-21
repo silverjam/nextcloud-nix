@@ -17,6 +17,7 @@ step "upgrade: restore current flake (NC 34) → deploy → occ upgrade"
 # needsDbUpgrade — the upgrade itself clears it. Two-phase deploy.
 RESTORE_BASE
 nix run .#deploy || echo "  (deploy aborted at init — expected during a major swap)"
+nix run .#apply-config          # de-stale apps_paths BEFORE any occ boot
 nix run .#occ -- upgrade >/tmp/nc-upgrade-output.log 2>&1 || {
   echo "occ upgrade failed — output:"
   sed 's/^/  | /' /tmp/nc-upgrade-output.log | tail -n 30
