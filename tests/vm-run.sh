@@ -48,7 +48,8 @@ cleanup() {
     return
   fi
   [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
-  rm -f "$DISK" "$SEED" "$PIDFILE" "$CACHE/user-data-$TS.yml" "$CACHE/meta-data.yml"
+  rm -f "$DISK" "$SEED" "$PIDFILE"
+  rm -rf "$CACHE/isoin-$TS"
 }
 trap cleanup EXIT
 
@@ -76,14 +77,17 @@ fi
 # --- bootstrap image with systemd present (vm cloud images have it built-in;
 #     no systemd-sysv needed — /sbin/init exists on cloud images)
 echo "[harness] building seed iso"
-cat > "$CACHE/user-data-$TS.yml" <<EOF
+# NoCloud requires the EXACT basenames user-data + meta-data
+ISOIN="$CACHE/isoin-$TS"
+mkdir -p "$ISOIN"
+cat > "$ISOIN/user-data" <<EOF
 #cloud-config
 disable_root: false
 hostname: nextcloud-test-vm
 ssh_authorized_keys:
   - $(cut -d' ' -f1,2 "$KEY.pub")
 EOF
-cat > "$CACHE/meta-data.yml" <<EOF
+cat > "$ISOIN/meta-data" <<EOF
 instance-id: nc-test-vm
 local-hostname: nextcloud-test-vm
 EOF
