@@ -4,3 +4,6 @@
 
 # just dump output (journal bundle written by `just dump`)
 /log
+
+# vm test artifacts (cloud image cache, overlays, qemu logs)
+tests/.vm-cache/

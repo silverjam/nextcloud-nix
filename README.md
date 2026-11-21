@@ -245,8 +245,14 @@ repos are format-compatible; `just backup-list` works identically remote.
   host's, so unit names, ports and `/var/lib` cannot collide with production.
   `NC_TEST_KEEP=1 just test-docker ...` keeps the container for debugging;
   `NC_TEST_REBUILD=1` refreshes the systemd base image.
-- **Layer C (planned):** QEMU + cloud-init Ubuntu VM for cold boots, reboots,
-  the nixpkgs-upgrade matrix and real tailscale.
+- **Layer C (VM harness):** `just test-vm` — a real Ubuntu 26.04 VM
+  (qemu/KVM + cloud-init, disposable qcow2 overlay per run on a cached cloud
+  image) running the *same* scenario scripts over ssh. Adds what containers
+  can't cover: cold boot, **reboot persistence** (scenario `reboot` asserts
+  unit enablement, all four timers, instance state and a working login after
+  a power cycle), real disk layout. KVM-accelerated when `/dev/kvm` is
+  writable, TCG emulation otherwise. `NC_TEST_KEEP=1` keeps the VM;
+  artifacts live in `tests/.vm-cache/` (gitignored).
 
 ## Full reset (deletes all instance data)
 

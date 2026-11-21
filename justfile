@@ -50,6 +50,11 @@ restore *args:
 test-docker scenario="install":
     tests/docker-run.sh {{ scenario }}
 
+# layer-C harness: REAL Ubuntu VM (qemu/kvm + cloud-init) — cold boot, reboot
+# persistence, same scenarios + reboot. First run downloads ~1GB cloud image.
+test-vm scenario="install":
+    tests/vm-run.sh {{ scenario }}
+
 # install the lefthook binary (nix profile; idempotent up/downgrades)
 hooks-install:
     nix profile add nixpkgs#lefthook
