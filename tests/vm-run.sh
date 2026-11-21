@@ -63,6 +63,9 @@ SSH_OPTS=(-p "$SSH_PORT"
   -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
   -o ConnectTimeout=5 -o LogLevel=ERROR)
 SSHRUN() { ssh "${SSH_OPTS[@]}" root@127.0.0.1 "$@"; }
+# bounded probe: during a reboot the guest may accept TCP but never answer,
+# and ssh would otherwise wait ~2min for the banner per attempt
+SSHPROBE() { timeout 10 ssh "${SSH_OPTS[@]}" root@127.0.0.1 true 2>/dev/null; }
 
 # --- ssh key (stable across runs: the seed embeds the pubkey)
 [ -f "$KEY" ] || ssh-keygen -q -t ed25519 -N '' -f "$KEY"
@@ -120,7 +123,7 @@ echo "[harness] booting vm (scenario: $SCENARIO, port $SSH_PORT, $ACCEL)"
 
 up=""
 for _ in $(seq 1 240); do
-  SSHRUN true 2>/dev/null && { up=1; break; }
+  SSHPROBE && { up=1; break; }
   sleep 2
 done
 [ -n "$up" ] || {
@@ -146,11 +149,21 @@ if [ "$SCENARIO" = "reboot" ]; then
   cat $STREAM1 | SSHRUN 'bash -s'
   SSHRUN 'sync && systemctl reboot' 2>/dev/null || true
   echo "[harness] vm rebooting"
-  for _ in $(seq 1 180); do
-    SSHRUN true 2>/dev/null && break
+  # phase 1: wait for the connection to drop (shutdown in progress) — probing
+  # too early would "succeed" against a VM that is mid-shutdown
+  for _ in $(seq 1 60); do
+    SSHPROBE || break
     sleep 2
   done
-  SSHRUN 'systemctl is-system-running --wait 2>/dev/null || systemctl is-system-running' >/dev/null
+  # phase 2: wait for it to return
+  up2=""
+  for _ in $(seq 1 180); do
+    SSHPROBE && { up2=1; break; }
+    sleep 2
+  done
+  [ -n "$up2" ] || { echo "[harness] vm did not come back after reboot" >&2; exit 1; }
+  SSHRUN 'systemctl is-system-running' >/dev/null || true
+  sleep 3
   echo "[harness] vm back up — asserting persistence"
   cat $STREAM2 | SSHRUN 'bash -s'
 else
