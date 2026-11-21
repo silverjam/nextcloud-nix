@@ -60,6 +60,11 @@ hooks-setup:
     nix run nixpkgs#lefthook -- install
     test -f .git/hooks/pre-commit && echo "pre-commit hook wired — next commit runs flake-check + shellcheck + just-syntax"
 
+# everything the pre-commit hook runs, without needing a git commit
+# (--all-files neutralizes lefthook's staged-files scoping)
+check:
+    nix run nixpkgs#lefthook -- run pre-commit --all-files
+
 # mirror overview: sizes, file counts, last syncs, preserved deletions
 mirror-list:
     nix run .#nc-data-sync -- status

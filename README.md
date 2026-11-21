@@ -62,6 +62,7 @@ just dump                  # write state + failing-unit detail + journal to ./lo
 (binary into your nix profile) and once per clone `just hooks-setup`. Every
 `git commit` then runs `nix flake check` (output only on failure),
 shellcheck over `tests/`, and justfile syntax (≈4s once the store is warm).
+Run the same set on demand with `just check` (no git needed).
 Escape hatches: `git commit --no-verify` or `LEFTHOOK=0 git commit …`.
 Hook auto-skips during rebase/merge. Note the check evaluates the working
 tree, not only the staged files.
