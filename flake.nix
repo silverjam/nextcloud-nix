@@ -877,6 +877,11 @@
 
         echo "== restarting services =="
         systemctl start nextcloud-fpm nextcloud-caddy
+        # full archives snapshot config.php while maintenance mode is ON
+        # (the consistency window) — a restored instance must never boot
+        # stuck in maintenance
+        runuser -u ${ncUser} -- env HOME=${ncRoot} NEXTCLOUD_CONFIG_DIR=${ncConfig} \
+          ${phpEnv}/bin/php ${nc}/occ maintenance:mode --off >/dev/null 2>&1 || true
         systemctl restart nextcloud-init.service
         systemctl start nextcloud-cron.timer
 
