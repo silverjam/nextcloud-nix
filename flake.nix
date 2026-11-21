@@ -1242,7 +1242,7 @@
         PrivateTmp=true
         ProtectSystem=strict
         ProtectHome=true
-        ReadWritePaths=${ncRoot}
+        ReadWritePaths=${ncRoot} ${backupRoot}
         RestrictAddressFamilies=AF_UNIX
       '';
 
