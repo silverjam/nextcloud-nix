@@ -22,5 +22,6 @@ nix run .#occ -- upgrade >/dev/null || fail "occ upgrade failed"
 v2="$(PG_BINARY_VERSION)"
 case "$v2" in 17.12*) ok "now on PostgreSQL $v2" ;; *) fail "expected pg 17.12, got $v2" ;; esac
 ASSERT_HEALTHY 34.0.6
+nix run .#nc-backup -- incremental     # first dump UNDER the new pg binary
 nix run .#nc-backup -- validate-deep
 ok "pg 17.11→17.12 (+nc patch bump) upgrade complete (data dir survived)"
