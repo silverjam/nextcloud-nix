@@ -50,8 +50,12 @@ echo "[harness] booting container $C (systemd container)"
 docker run -d --privileged --name "$C" \
   --hostname nextcloud-test \
   -v nc-test-nix:/nix \
-  -v "$REPO:/test:ro" \
   "$BASE_IMG" /sbin/init >/dev/null
+
+# NOTE: the repo is docker-cp'd into the container (not bind-mounted): nix's
+# libgit2 refuses git repos owned by another uid, and a copy also lets the
+# container own its flake state entirely.
+docker cp "$REPO/." "$C:/test/" >/dev/null
 
 echo "[harness] waiting for container systemd"
 systemd_up=""
