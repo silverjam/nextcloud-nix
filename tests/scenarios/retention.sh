@@ -20,7 +20,7 @@ RID="$(printf '%s' "$OUT" | grep -oE 'snapshot [0-9a-f]{8}' | awk '{print $2}')"
 
 step "synthesize 100 snapshots inside ~2 hours (saturate the hourly buckets)"
 for i in $(seq 0 99); do
-  RT backup --time "$(date -d "-$i minutes" '+%Y-%m-%d %H:%M:%S')" \
+  RT backup --time "$(date -d "-$((i + 3)) minutes" '+%Y-%m-%d %H:%M:%S')" \
     --tag nextcloud --tag retention-test /var/lib/nextcloud >/dev/null
 done
 N1="$(COUNT)"
