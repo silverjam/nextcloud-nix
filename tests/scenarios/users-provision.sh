@@ -22,3 +22,32 @@ nix run .#deploy >/dev/null
 AFTER="$(nix run .#occ -- user:list | grep -c drill1)"
 expect_equal "$BEFORE" "$AFTER" "user count stable across redeploys"
 ok "provisioning is idempotent"
+
+step "provision drill2, then DEPROVISION it (backup-on-removal)"
+sed -i 's|drill1 = { displayName = "Drill One"; quota = "1 GB"; groups = \[ "drillers" \]; }; };|drill1 = { displayName = "Drill One"; quota = "1 GB"; groups = [ "drillers" ]; }; drill2 = { displayName = "Drill Two"; }; };|' /test/flake.nix
+nix run .#deploy
+nix run .#occ -- user:info drill2 | grep -q 'user_id: drill2' || fail "user drill2 not created"
+F="/var/lib/nextcloud/data/drill2/files/provision-deleteme.txt"
+install -d -o nextcloud -g nextcloud /var/lib/nextcloud/data/drill2/files
+printf 'drill2-payload\n' > "$F"
+chown nextcloud:nextcloud "$F"
+ok "drill2 created with a file to lose"
+
+sed -i 's|deprovisionedUsers = \[ \];|deprovisionedUsers = [ "drill2" ];|' /test/flake.nix
+nix run .#deploy
+
+step "drill2 removed, backup verified on disk"
+nix run .#occ -- user:info drill2 >/dev/null 2>&1 && fail "drill2 still exists!"
+BK="$(find /var/backups/nextcloud/deprovisioned/drill2 -maxdepth 1 -mindepth 1 -type d | head -1)"
+[ -n "$BK" ] || fail "no backup dir for removed user"
+test -s "$BK/db.dump" || fail "db.dump missing/empty"
+test -f "$BK/files/provision-deleteme.txt" || fail "user files not backed up"
+grep -aq 'drill2' /var/lib/nextcloud/provision-removals.log || fail "removal not logged"
+ok "removed with verified backup: $BK"
+
+step "removal idempotency: re-deploy takes no second backup"
+D1="$(find /var/backups/nextcloud/deprovisioned/drill2 -mindepth 1 -maxdepth 1 -type d | wc -l)"
+nix run .#deploy >/dev/null
+D2="$(find /var/backups/nextcloud/deprovisioned/drill2 -mindepth 1 -maxdepth 1 -type d | wc -l)"
+expect_equal "$D1" "$D2" "no duplicate removal backups"
+ok "removal entries are self-draining"

@@ -75,6 +75,12 @@
       #     alice = { displayName = "Alice"; quota = "2 GB"; groups = [ "family" ]; };
       #   };
       provisionedUsers = { };
+      # Explicit removal list — the ONLY way a provisioned user is deleted.
+      # For each entry that still exists, a per-user backup is taken first
+      # (files + full pg_dump into /var/backups/nextcloud/deprovisioned/<uid>/<ts>/)
+      # and the deletion aborts if that backup cannot be verified. Entries
+      # are self-draining: once the user is gone they are a no-op.
+      deprovisionedUsers = [ ];
       # rendered per-user specs: uid<TAB>display<TAB>quota<HAB>groups(;-sep)
       provisionSpecLines = lib.mapAttrsToList
         (name: u:
@@ -87,6 +93,8 @@
         provisionedUsers;
       provisionShellArray = lib.concatStringsSep " "
         (map lib.escapeShellArg provisionSpecLines);
+      removeShellArray = lib.concatStringsSep " "
+        (map lib.escapeShellArg deprovisionedUsers);
 
       # ------------------------------------------------------------------
       # Names & paths (single source of truth for units, Caddyfile, scripts)
@@ -1140,7 +1148,8 @@
         export HOME=${ncRoot}
 
         SPECS=( ${provisionShellArray} )
-        if [ "''${#SPECS[@]}" -eq 0 ]; then
+        REMOVES=( ${removeShellArray} )
+        if [ "''${#SPECS[@]}" -eq 0 ] && [ "''${#REMOVES[@]}" -eq 0 ]; then
           echo "provision: no users configured — nothing to do"
           exit 0
         fi
@@ -1176,6 +1185,38 @@
               OCC group:adduser "$g" "$uid" >/dev/null 2>&1 || true
             done
           fi
+        done
+
+        # --- explicit removals (deprovisionedUsers) ----------------------
+        # backup-then-delete; the deletion is refused if the backup cannot
+        # be verified. Idempotent: entries no-op once the user is gone.
+        for raw in "''${REMOVES[@]}"; do
+          ruid="$raw"
+          UOK() { echo "$1" | grep -qE '^[A-Za-z0-9_.@-]+$'; }
+          UOK "$ruid" || { echo "provision: refusing to remove suspicious uid '$ruid'" >&2; exit 1; }
+          if ! OCC user:info "$ruid" >/dev/null 2>&1; then
+            echo "provision: $ruid already absent — nothing to do"
+            continue
+          fi
+          DEST="${backupRoot}/deprovisioned/$ruid/$(date +%Y%m%d-%H%M%S)"
+          install -d -m 0700 "$DEST"
+          echo "provision: removing $ruid — backup first (files + db dump) into $DEST"
+          if [ -d "${ncRoot}/data/$ruid" ]; then
+            cp -a "${ncRoot}/data/$ruid" "$DEST/files"
+          else
+            echo "provision: (no data dir for $ruid)" | tee "$DEST/files-note.txt"
+          fi
+          ${pg}/bin/pg_dump --format=custom \
+            --host=${dbSock} --username=${ncUser} \
+            --file="$DEST/db.dump" nextcloud
+          OCC user:info "$ruid" > "$DEST/user-info.txt" 2>&1 || true
+          if [ ! -s "$DEST/db.dump" ]; then
+            echo "provision: FATAL — backup unverified; NOT deleting $ruid" >&2
+            exit 1
+          fi
+          OCC user:delete "$ruid" >/dev/null
+          echo "removed uid=$ruid backup=$DEST (occ user:delete done)" \
+            | tee -a "${ncRoot}/provision-removals.log"
         done
         chmod 0600 "$CRED"
         echo "provision: done ($NEW created, $(( ''${#SPECS[@]} - NEW )) already existed)"

@@ -292,9 +292,14 @@ provisionedUsers = {
     `/var/lib/nextcloud/provision-credentials-*.log` (0600) — hand it to the
     person and have them change it;
   - **idempotent**: quota and groups are applied to new *and* existing users;
-  - **never destructive**: removing a user from the list does nothing —
-    declarative deletion would delete their files. `user:delete` stays a
-    conscious manual step;
+  - **removal is explicit and self-draining**: declare the uid in
+    `deprovisionedUsers = [ "alice" ];` — a per-user backup (files + full
+    `pg_dump`) is taken into
+    `/var/backups/nextcloud/deprovisioned/<uid>/<ts>/` and the delete is
+    *refused* if that backup cannot be verified. Entries no-op once the user
+    is gone; the next `sync-data` cycle adds a second copy of the removed
+    files to the mirror's `.trash`. Removing a user from
+    `provisionedUsers` alone does nothing;
   - passwords of existing users are never rotated by deploys.
 
 ### Everything else worth knowing
