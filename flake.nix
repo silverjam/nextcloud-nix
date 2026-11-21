@@ -515,7 +515,7 @@
         # --- trusted domains: localhost, hostname, primary LAN IP ---
         RUNOCC config:system:set trusted_domains 0 --value localhost
         RUNOCC config:system:set trusted_domains 1 --value "$(hostname)"
-        LANIP="$(ip -4 -o route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+        LANIP="$(ip -4 -o route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || true)"
         if [ -n "$LANIP" ]; then
           RUNOCC config:system:set trusted_domains 2 --value "$LANIP"
         fi

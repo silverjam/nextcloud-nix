@@ -12,7 +12,7 @@ if [ -x /nix/var/nix/profiles/default/bin/nix ] \
 else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq curl ca-certificates xz-utils sudo git findutils >/dev/null
+  apt-get install -y -qq curl ca-certificates xz-utils sudo git findutils iproute2 >/dev/null
   echo "== installing Nix (multi-user, with container systemd) =="
   curl -sSfL https://nixos.org/nix/install -o /tmp/nix-install.sh
   sh /tmp/nix-install.sh --daemon --yes
