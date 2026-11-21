@@ -102,7 +102,7 @@ echo "[harness] booting vm (scenario: $SCENARIO, port $SSH_PORT, $ACCEL)"
 "$QEMU" \
   -machine "q35,$ACCEL" $CPUARG -m 2048 -smp 2 \
   -drive "file=$DISK,if=virtio,format=qcow2" \
-  -drive "file=$SEED,if=virtio,media=cdrom,format=raw" \
+  -cdrom "$SEED" \
   -device virtio-net-pci,netdev=n0 \
   -netdev "user,id=n0,hostfwd=tcp:$PORTFWD" \
   -device virtio-rng-pci \
@@ -116,8 +116,10 @@ for _ in $(seq 1 240); do
   sleep 2
 done
 [ -n "$up" ] || {
-  echo "[harness] ssh never came up — console tail:" >&2
-  tail -30 "$CONSOLE" >&2
+  echo "[harness] ssh never came up — cloud-init datasource evidence:" >&2
+  grep -aA4 -iE 'datasource|nocloud|cidata|ds-identify' "$CONSOLE" | tail -24 >&2 || true
+  echo "[harness] console tail:" >&2
+  tail -15 "$CONSOLE" >&2
   exit 1
 }
 echo "[harness] vm is up (ssh -p $SSH_PORT root@127.0.0.1)"
