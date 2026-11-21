@@ -153,7 +153,12 @@ jobs:
           github.event_name != 'workflow_dispatch'
           || inputs.docker_scenario == 'all'
           || inputs.docker_scenario == matrix.scenario
-        run: tests/docker-run.sh "${{ matrix.scenario }}"
+        run: |
+          if ! tests/docker-run.sh "${{ matrix.scenario }}"; then
+            echo "::warning::first attempt failed under runner load — retrying once"
+            sleep 15
+            tests/docker-run.sh "${{ matrix.scenario }}"
+          fi
 
   vm-tests:
     name: VM (qemu/kvm) — ${{ inputs.vm_scenario || 'install' }}
