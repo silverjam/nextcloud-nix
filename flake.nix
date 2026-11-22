@@ -1572,7 +1572,7 @@
           || { echo "primary not ONLINE" >&2; exit 1; }
         zpool status ${zfsPoolBackup} 2>/dev/null | grep -q ONLINE \
           || { echo "backup not ONLINE" >&2; exit 1; }
-        findmnt -no TARGET /var/lib/nextcloud/data \
+        findmnt -no SOURCE /var/lib/nextcloud/data \
           | grep -q primary || { echo "datadir not a zfs mount" >&2; exit 1; }
         systemctl is-active --quiet nextcloud-fpm nextcloud-db nextcloud-caddy \
           || { echo "stack not healthy" >&2; exit 1; }
