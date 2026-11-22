@@ -281,6 +281,61 @@
         echo "archive: import complete — '$NAME' shared with ${archiveShareGroup}"
       '';
 
+      ncArchiveShare = pkgs.writeShellScriptBin "nc-archive-share" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+        OCC() {
+          /usr/bin/sudo -u ${ncUser} env HOME=${ncRoot} NEXTCLOUD_CONFIG_DIR=${ncConfig} \
+            ${phpEnv}/bin/php ${nc}/occ "$@"
+        }
+        # gates: verified migration + the bind mounted + the owner provisioned
+        test -f ${migrationState}/migration-complete \
+          || { echo "refusing: run zfs-verify-migration first" >&2; exit 1; }
+        findmnt -no SOURCE "${archiveBindWhere}" \
+          || { echo "${archiveBindWhere} is not bind-mounted — start the bind unit first" >&2; exit 1; }
+        OCC user:info ${archiveOwner} >/dev/null \
+          || { echo "user ${archiveOwner} not provisioned" >&2; exit 1; }
+
+        TDIR="${archiveBindWhere}"
+        # group-writable pass so the NC process can move deletes into trash
+        PERM="${migrationState}/archive-perms-done"
+        if [ ! -s "$PERM" ]; then
+          chgrp -R ${ncUser} "${archiveSource}"
+          find "${archiveSource}" -type d -exec chmod g+rwX {} +
+          find "${archiveSource}" -type d -exec chmod g+s {} + 2>/dev/null || true
+          find "${archiveSource}" -type f -exec chmod g+rw {} +
+          date -u > "$PERM"
+          echo "archive: group-writable pass done"
+        fi
+        echo "archive: scanning $TDIR into the filecache"
+        OCC files:scan ${archiveOwner}
+
+        # share via the OCS API as the owner (password from the 0600 log)
+        PW="$(grep -ah "^uid=${archiveOwner} password=" ${ncRoot}/provision-credentials-*.log 2>/dev/null \
+          | sed -E 's/^uid=[^ ]+ password=([^ ]+).*/\1/' | tail -1 || true)"
+        [ -n "$PW" ] \
+          || { echo "no credentials for ${archiveOwner} on file — share by hand or re-provision" >&2; exit 1; }
+        NAME="${archiveBindMountName}"
+        EXIST="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -G \
+          --data-urlencode "path=/$NAME" \
+          "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json" \
+          | grep -aoE '"share_with":"${archiveShareGroup}"' | wc -l || true)"
+        if [ "$EXIST" -ge 1 ]; then
+          echo "archive: ${archiveShareGroup} share already present"
+        else
+          RESP="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' \
+            --data-urlencode "path=/$NAME" \
+            --data-urlencode "shareType=3" \
+            --data-urlencode "shareWith=${archiveShareGroup}" \
+            --data-urlencode "permissions=${archiveSharePerms}" \
+            "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json")"
+          echo "$RESP" | grep -aq '"statuscode":200' \
+            || { echo "share creation failed: $RESP" >&2; exit 1; }
+        fi
+        echo "archive: '$NAME' shared with ${archiveShareGroup} (interim bind; option B replaces it)"
+      '';
+
       zfsProvisionedPasswords = pkgs.writeShellScriptBin "provisioned-passwords" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
@@ -325,6 +380,22 @@
       archiveSharePerms = "15"; # read+change+create+delete, no re-share
       archiveSource = "/mnt/archive";
       ncWebUrl = "http://127.0.0.1:${webPort}";
+      # interim: the archive dataset binds INTO the datadir (zero copy) and is
+      # served as a native shared folder; option B's copy replaces this later
+      archiveBindMountName = "Archive";
+      archiveBindWhere = "${ncDataDir}/${archiveOwner}/files/${archiveBindMountName}";
+      archiveBindMountUnit = pkgs.writeText "var-lib-nextcloud-data-archive-files-Archive.mount" ''
+        [Unit]
+        Description=Nextcloud archive dataset bind-mounted into the datadir (interim)
+        ConditionPathIsDirectory=${archiveSource}
+        [Mount]
+        What=${archiveSource}
+        Where=${archiveBindWhere}
+        Type=none
+        Options=bind
+        [Install]
+        WantedBy=multi-user.target
+      '';
 
       migrationState = "${backupRoot}/migration-state"; # interlock stamps
       disasterMirror = "/var/backups/disaster-mirror-sdc1"; # root-disk full copy
