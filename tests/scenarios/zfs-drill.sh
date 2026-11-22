@@ -96,8 +96,10 @@ ok "NC live on drill-primary/nextcloud"
 step "phase 3: backup zfs pool + replica seed"
 CONFIRM=backup nix run .#zfs-create-backup
 findmnt -no TARGET /var/backups/zfs-replica >/dev/null || fail "replica not mounted"
-test -f /var/backups/zfs-replica/nextcloud-data/personal-legacy.txt \
-  || fail "planted file not replicated"
+test -f /var/backups/zfs-replica/archive/personal-legacy.txt \
+  || fail "planted legacy file not replicated in archive"
+find /var/backups/zfs-replica/nextcloud-data -type f | grep -q . \
+  || fail "nextcloud datadir replica empty"
 ok "replica seeded + personal file replicated"
 
 step "replication: two runs (full + incremental)"
