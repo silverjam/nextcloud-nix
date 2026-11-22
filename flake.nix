@@ -144,7 +144,6 @@
           case "$MODEL" in *"${primaryDiskModel}"*) ;; *) echo "refusing: $SRCDEV is not the primary drive (model: $MODEL)" >&2; exit 1;; esac
         fi
         LABEL="$(lsblk -no LABEL "$SRCDEV")"
-        case "$MODEL" in *ST2000DL001*) ;; *) echo "refusing: $SRCDEV is not the primary drive (model: $MODEL)" >&2; exit 1;; esac
         [ "$LABEL" = "Data" ] || { echo "refusing: label is '$LABEL', expected 'Data'" >&2; exit 1; }
         echo "disaster-mirror: rsync $SRC ($SRCDEV, $MODEL) -> ${disasterMirror}"
         install -d -m 0755 "${disasterMirror}"
