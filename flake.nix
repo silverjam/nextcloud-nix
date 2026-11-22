@@ -1531,6 +1531,11 @@
         zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolBackup} \
           || { echo "backup pool missing" >&2; exit 1; }
         STAMP="sync-$(date +%Y%m%d%H%M%S)"
+        # manual + timer runs can land in the same second — never collide
+        while zfs list -H -o name "${zfsPoolPrimary}/nextcloud@$STAMP" >/dev/null 2>&1; do
+          sleep 1
+          STAMP="sync-$(date +%Y%m%d%H%M%S)"
+        done
         PREV_NC="$(zfs list -t snapshot -o name -H -s creation ${zfsPoolPrimary}/nextcloud | tail -1 | cut -d@ -f2 || true)"
         PREV_AR="$(zfs list -t snapshot -o name -H -s creation ${zfsPoolPrimary}/archive | tail -1 | cut -d@ -f2 || true)"
         zfs snapshot ${zfsPoolPrimary}/nextcloud@$STAMP
