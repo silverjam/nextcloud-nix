@@ -1296,20 +1296,37 @@
         echo "zfs-mirror-ntfs: verified — phase-1 interlock stamp written into the sdb1 mirror"
       '';
 
-      zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" ''
+      zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" '''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
         [ "''${CONFIRM:-}" = "primary" ] \
-          || { echo "This DESTROYS ${primaryDisk} (sdc1 NTFS). A verified copy exists on sdb1 (see zfs-mirror-ntfs)." >&2
+          || { echo "This DESTROYS ${primaryDisk} (sdc1 NTFS). A verified second copy exists (disaster mirror or sdb1 mirror)." >&2
                echo "Set CONFIRM=primary to proceed." >&2; exit 1; }
-        # interlock 1: the phase-1 stamp lives in the sdb1 NTFS mirror
+        # interlock: a verified second copy of the sdc1 content must exist —
+        # EITHER the local disaster mirror (root disk) OR the sdb1 NTFS mirror
         M="/var/backups/ntfs-sdb1-mnt"; mkdir -p "$M"
-        if ! findmnt -S "${backupDisk}" >/dev/null 2>&1; then
-          mount -t ntfs3 -o ro "${backupDisk}" "$M"
+        HAVE_DISASTER=0; ARCHIVE_SRC=""; MOUNTED_BY_US=0
+        test -f ${migrationState}/disaster-mirror-verified && HAVE_DISASTER=1
+        if [ -d "${disasterMirror}" ] && [ -n "$(find ${disasterMirror} -type f 2>/dev/null | head -1)" ]; then
+          ARCHIVE_SRC="${disasterMirror}"
+          echo "interlock: local disaster mirror present ($(find ${disasterMirror} -type f | wc -l) files)"
         fi
-        test -f "$M/phase1-verified.stamp" \
-          || { echo "refusing: phase-1 interlock stamp missing in the sdb1 mirror" >&2; exit 1; }
-        umount "$M" 2>/dev/null || true
+        if findmnt -S "${backupDisk}" >/dev/null 2>&1; then
+          SDB=1; MOUNTED_BY_US=1
+        elif [ "$(lsblk -no FSTYPE "${backupDisk}" | head -1)" = "ntfs" ]; then
+          mount -t ntfs3 -o ro "${backupDisk}" "$M" && SDB=1 && MOUNTED_BY_US=1
+        else
+          SDB=0
+        fi
+        if [ "$SDB" = "1" ] && [ -f "$M/phase1-verified.stamp" ]; then
+          ARCHIVE_SRC="$M"
+          echo "interlock: sdb1 NTFS mirror present (phase-1 stamp ok)"
+        fi
+        if [ -z "$ARCHIVE_SRC" ]; then
+          echo "refusing: no verified second copy of the sdc1 content found" >&2
+          echo "(need a verified ${disasterMirror} or a phase-1-verified sdb1 mirror)" >&2
+          exit 1
+        fi
         # device triple-check
         test -b "${primaryDisk}" || { echo "no such device: ${primaryDisk} — reconnect sdc1" >&2; exit 1; }
         MODEL="$(lsblk -no MODEL "${primaryDisk}")"
@@ -1322,6 +1339,7 @@
           && { echo "pool 'primary' already exists" >&2; exit 1; }
         # maintenance + pause timers + preserve the current datadir
         nix run .#occ -- maintenance:mode --on >/dev/null 2>&1 || true
+        nix run .#apply-config >/dev/null 2>&1 || true
         systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-init \
           nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer \
           nextcloud-provision.service nextcloud-cron.timer 2>/dev/null || true
@@ -1339,18 +1357,14 @@
         echo "primary: restoring nc datadir from the safety tar"
         tar xzf "$SAVED" -C /var/lib/nextcloud
         chown -R nextcloud:nextcloud /var/lib/nextcloud/data
-        echo "primary: importing personal archive from the sdb1 NTFS mirror -> /mnt/archive"
-        M="/var/backups/ntfs-sdb1-mnt"
-        if ! findmnt -S "${backupDisk}" >/dev/null 2>&1; then
-          mount -t ntfs3 -o ro "${backupDisk}" "$M"
-        fi
+        echo "primary: importing personal content from $ARCHIVE_SRC -> /mnt/archive"
         rsync -aH --numeric-ids --info=progress2 \
           --exclude='phase1-verified.stamp' \
-          "$M"/ /mnt/archive/
-        FS="$(find "$M" -type f ! -name 'phase1-verified.stamp' | wc -l)"
+          "$ARCHIVE_SRC"/ /mnt/archive/
+        FS="$(find "$ARCHIVE_SRC" -type f ! -name 'phase1-verified.stamp' | wc -l)"
         FA="$(find /mnt/archive -type f | wc -l)"
-        echo "primary: archive files mirrored=$FS imported=$FA"
-        umount "$M" 2>/dev/null || true
+        echo "primary: archive files secondcopy=$FS imported=$FA"
+        if [ "$MOUNTED_BY_US" = 1 ]; then umount "$M" 2>/dev/null || true; fi
         systemctl start nextcloud-fpm nextcloud-caddy nextcloud-init.service 2>/dev/null || true
         nix run .#occ -- maintenance:mode --off >/dev/null 2>&1 || true
         nix run .#occ -- status | grep -q 'installed: true' \
