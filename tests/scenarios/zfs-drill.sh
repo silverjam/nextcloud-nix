@@ -106,9 +106,10 @@ ok "replica seeded + personal file replicated"
 
 step "replication: two runs (full + incremental)"
 nix run .#zfs-replicate
-PREV_SNAPS="$(zfs list -t snapshot -H -o name | grep -c 'nextcloud@sync-')"
+# awk counts: grep -c exits 1 on zero matches and set -e kills the script
+PREV_SNAPS="$(zfs list -t snapshot -H -o name 2>/dev/null | awk '/nextcloud@sync-/{n++} END{print n+0}')"
 nix run .#zfs-replicate
-NEW_SNAPS="$(zfs list -t snapshot -H -o name | grep -c 'nextcloud@sync-')"
+NEW_SNAPS="$(zfs list -t snapshot -H -o name 2>/dev/null | awk '/nextcloud@sync-/{n++} END{print n+0}')"
 [ "$NEW_SNAPS" -gt "$PREV_SNAPS" ] || fail "snapshots not accumulating"
 ok "replication applying + snapshot history keeping"
 

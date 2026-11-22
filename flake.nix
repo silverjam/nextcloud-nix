@@ -1550,7 +1550,7 @@
         date -u +"%Y-%m-%dT%H:%M:%SZ snap=$STAMP" > ${primaryMount}.last-replication
         KEEP=$(( ${zfsKeepSnapshots} ))
         zfs list -t snapshot -o name -H -s creation -r ${zfsPoolPrimary} 2>/dev/null \
-          | grep -v seed | grep '@' | head -n +$((KEEP + 1)) | cut -d@ -f2 \
+          | grep -v seed | grep '@' | head -n -$KEEP | cut -d@ -f2 \
           | sort -u | while IFS= read -r s; do
               zfs destroy "${zfsPoolPrimary}/nextcloud@$s" 2>/dev/null || true
               zfs destroy "${zfsPoolPrimary}/archive@$s" 2>/dev/null || true
