@@ -98,7 +98,9 @@ CONFIRM=backup nix run .#zfs-create-backup
 findmnt -no TARGET /var/backups/zfs-replica >/dev/null || fail "replica not mounted"
 test -f /var/backups/zfs-replica/archive/personal-legacy.txt \
   || fail "planted legacy file not replicated in archive"
-find /var/backups/zfs-replica/nextcloud-data -type f | grep -q . \
+# -print -quit, not a grep pipe: pipefail turns grep -q's early exit into a
+# find SIGPIPE (141) and would report an empty replica
+[ -n "$(find /var/backups/zfs-replica/nextcloud-data -type f -print -quit 2>/dev/null)" ] \
   || fail "nextcloud datadir replica empty"
 ok "replica seeded + personal file replicated"
 
