@@ -145,7 +145,7 @@
         fi
         LABEL="$(lsblk -no LABEL "$SRCDEV")"
         [ "$LABEL" = "Data" ] || { echo "refusing: label is '$LABEL', expected 'Data'" >&2; exit 1; }
-        echo "disaster-mirror: rsync $SRC ($SRCDEV, $MODEL) -> ${disasterMirror}"
+        echo "disaster-mirror: rsync $SRC ($SRCDEV, ${MODEL:-loop-sandbox}) -> ${disasterMirror}"
         install -d -m 0755 "${disasterMirror}"
         # -xX dropped: NTFS$CI.* xattrs cannot round-trip to ext4 (error 95 per
 #          # file); the data + times + hardlinks are what a disaster copy needs
