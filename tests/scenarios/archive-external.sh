@@ -8,7 +8,7 @@ install_and_assert
 systemctl start nextcloud-provision.service 2>/dev/null || true
 
 step "gate: share recipe refuses without the bind"
-M=/var/backups/nextcloud/migration-state
+MS=/var/backups/nextcloud/migration-state
 mkdir -p "$MS"
 touch "$MS/migration-complete"
 ERR="$(nix run .#nc-archive-share 2>&1 >/dev/null || true)"
