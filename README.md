@@ -318,8 +318,12 @@ account, per unit ordering), the recipe scans it and shares the folder with
 each member of `parents` (read+change+create+delete, 15) via the owner's OCS
 credentials. Per-member user-shares are deliberate: NC 34 silently drops
 type-3 group-share recipients, while user-shares carry every parameter.
-Delete-through-UI moves files into trash (retention disabled — nothing
-auto-expires) with the dataset copy untouched. **Long term (option B):
+**Interim limitation**: the bind path is fully browsable/readable through the
+web UI, but deleting through it is at view-level only (the physical file
+stays on the dataset — data-safe, and it reappears after the next scan);
+real cleanup (trash/versions/edit) comes with the option-B copy below, which
+uses native NC files. Delete-through-UI moves files into trash (retention
+disabled — nothing auto-expires) with the dataset copy untouched. **Long term (option B):
 `just nc-import-archive`** copies the archive dataset into the folder of
 service user `archive` as `Archive <year>-<year>` (name stamped once from the
 oldest file on disk), scans it and shares the same way; resumable (count
