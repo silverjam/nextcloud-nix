@@ -1568,12 +1568,14 @@
         ME="$(id -un)"
         if [ "$ME" != "${ncUser}" ]; then
           if [ "$(id -u)" = "0" ]; then
-            exec ${pkgs.util-linux}/bin/runuser -u ${ncUser} -- "$0" "$@"
+            exec ${pkgs.util-linux}/bin/runuser -u ${ncUser} -- \
+              env HOME=${ncRoot} NEXTCLOUD_CONFIG_DIR=${ncConfig} "$0" "$@"
           else
-            exec sudo -u ${ncUser} env HOME=${ncRoot} "$0" "$@"
+            exec sudo -u ${ncUser} env HOME=${ncRoot} NEXTCLOUD_CONFIG_DIR=${ncConfig} "$0" "$@"
           fi
         fi
         export HOME=${ncRoot}
+        export NEXTCLOUD_CONFIG_DIR=${ncConfig}
 
         SPECS=( ${provisionShellArray} )
         REMOVES=( ${removeShellArray} )
@@ -1621,10 +1623,18 @@
           if [ -n "$groups" ]; then
             IFS=';' read -ra GS <<< "$groups"
             for g in "''${GS[@]}"; do
-              OUT="$(OCC group:add "$g" 2>&1)" \
-                || echo "provision: group:add $g FAILED: $OUT"
-              OUT="$(OCC group:adduser "$g" "$uid" 2>&1)" \
-                || echo "provision: group:adduser $g $uid FAILED: $OUT"
+              OUT="$(OCC group:add "$g" 2>&1)" || true
+              case "$OUT" in
+                "") : ;;
+                *"already exists"*) : ;;
+                *) echo "provision: group:add $g FAILED: $OUT" >&2 ;;
+              esac
+              OUT="$(OCC group:adduser "$g" "$uid" 2>&1)" || true
+              case "$OUT" in
+                "") : ;;
+                *"already"*) : ;;
+                *) echo "provision: group:adduser $g $uid FAILED: $OUT" >&2 ;;
+              esac
             done
           fi
         done
