@@ -434,6 +434,11 @@
         {
           admin off
           auto_https off
+          # tailscale serve connects from loopback and sends the real client's
+          # X-Forwarded-Proto — trust it so NC sees HTTPS instead of http
+          servers {
+            trusted_proxies static 127.0.0.1/32
+          }
         }
 
         http://:${webPort} {
