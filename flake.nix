@@ -1623,18 +1623,20 @@
           if [ -n "$groups" ]; then
             IFS=';' read -ra GS <<< "$groups"
             for g in "''${GS[@]}"; do
-              OUT="$(OCC group:add "$g" 2>&1)" || true
-              case "$OUT" in
-                "") : ;;
-                *"already exists"*) : ;;
-                *) echo "provision: group:add $g FAILED: $OUT" >&2 ;;
-              esac
-              OUT="$(OCC group:adduser "$g" "$uid" 2>&1)" || true
-              case "$OUT" in
-                "") : ;;
-                *"already"*) : ;;
-                *) echo "provision: group:adduser $g $uid FAILED: $OUT" >&2 ;;
-              esac
+              # occ prints success to stdout ("Created group …",
+              # "user X added") — gate on EXIT STATUS, not output
+              if ! OUT="$(OCC group:add "$g" 2>&1)"; then
+                case "$OUT" in
+                  *"already exists"*) : ;;
+                  *) echo "provision: group:add $g FAILED: $OUT" >&2 ;;
+                esac
+              fi
+              if ! OUT="$(OCC group:adduser "$g" "$uid" 2>&1)"; then
+                case "$OUT" in
+                  *"already in group"*|*"added"*) : ;;
+                  *) echo "provision: group:adduser $g $uid FAILED: $OUT" >&2 ;;
+                esac
+              fi
             done
           fi
         done
