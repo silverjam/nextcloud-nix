@@ -80,6 +80,7 @@ ok "ntfs mirror + phase-1 stamp"
 
 step "phase 2: primary zfs pool; NC datadir moves onto zfs"
 nix run .#occ -- maintenance:mode --on >/dev/null
+umount /mnt/primary /mnt/backup 2>/dev/null || true
 CONFIRM=primary nix run .#zfs-create-primary
 SAVED_TAR="$(ls -1 /var/backups/nextcloud/pre-zfs-datadir-*.tar.gz 2>/dev/null | tail -1 || true)"
 [ -n "$SAVED_TAR" ] || fail "no pre-zfs safety tar found"
