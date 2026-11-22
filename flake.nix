@@ -1038,6 +1038,7 @@
         install -m 0644 ${dataSyncService} ${unitDir}/nextcloud-data-sync.service
         install -m 0644 ${dataSyncTimer} ${unitDir}/nextcloud-data-sync.timer
         install -m 0644 ${provisionService} ${unitDir}/nextcloud-provision.service
+        install -m 0644 ${archiveBindMountUnit} ${unitDir}/var-lib-nextcloud-data-archive-files-Archive.mount
 
         echo "== backup roots =="
         install -d -o ${ncUser} -g ${ncUser} -m 0700 \
@@ -1052,6 +1053,7 @@
         systemctl daemon-reload
         echo "== enabling services =="
         systemctl enable --now \
+          var-lib-nextcloud-data-archive-files-Archive.mount \
           nextcloud-db.service \
           nextcloud-fpm.service \
           nextcloud-caddy.service \
@@ -1950,6 +1952,7 @@
         "zfs-replicate" = zfsReplicate;
         "zfs-verify-migration" = zfsVerifyMigration;
         "nc-import-archive" = ncImportArchive;
+        "nc-archive-share" = ncArchiveShare;
         "zfs-check" = zfsCheck;
         "provisioned-passwords" = zfsProvisionedPasswords;
         nextcloud = nc;
@@ -2012,6 +2015,7 @@
                 "${zfsReplicate}/bin/zfs-replicate" \
                 "${zfsVerifyMigration}/bin/zfs-verify-migration" \
                 "${ncImportArchive}/bin/nc-import-archive" \
+                "${ncArchiveShare}/bin/nc-archive-share" \
                 "${zfsCheck}/bin/zfs-check" \
                 "${ncProvisionJob}/bin/nc-provision" \
                 "${zfsProvisionedPasswords}/bin/provisioned-passwords" \
