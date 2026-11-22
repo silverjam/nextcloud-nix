@@ -227,7 +227,9 @@
       replicaDataset = "${zfsPoolBackup}/nextcloud-data";
       replicaMount = "/var/backups/zfs-replica";
       arcMax = "8589934592"; # 8G of 30G RAM
-      zfsKeepSnapshots = "48"; # replication snapshots kept per dataset
+      zfsKeepSnapshots = "48"; # snapshot floor per dataset (never pruned below)
+      primaryPruneMinFree = "161061273600"; # 150 GiB: prune primary history only below this
+      replicaPruneMinFree = "107374182400"; # 100 GiB: prune replica history only below this
       migrationState = "${backupRoot}/migration-state"; # interlock stamps
       disasterMirror = "/var/backups/disaster-mirror-sdc1"; # root-disk full copy
       primarySrcMount = "/mnt/primary"; # sdc1 "Data" volume (drives-mount)
@@ -712,6 +714,8 @@
         ];
         $CONFIG['memcache.local']  = '\\OC\\Memcache\\APCu';
         $CONFIG['memcache.locking'] = '\\OC\\Memcache\\APCu';
+        $CONFIG['trashbin_retention_obligation']  = 'disabled'; // trash persists until manually expunged
+        $CONFIG['versions_retention_obligation']  = 'disabled'; // file versions persist until manually purged
         file_put_contents($configFile, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n");
         chmod($configFile, 0640);
         echo "nextcloud-apply-config: OK\n";
@@ -1526,13 +1530,25 @@
         fi
         date -u +"%Y-%m-%dT%H:%M:%SZ snap=$STAMP" > ${primaryMount}.last-replication
         KEEP=$(( ${zfsKeepSnapshots} ))
-        zfs list -t snapshot -o name -H -s creation -r ${zfsPoolPrimary} 2>/dev/null \
-          | grep -v seed | grep '@' | head -n -$KEEP | cut -d@ -f2 \
-          | sort -u | while IFS= read -r s; do
-              zfs destroy "${zfsPoolPrimary}/nextcloud@$s" 2>/dev/null || true
-              zfs destroy "${zfsPoolPrimary}/archive@$s" 2>/dev/null || true
-            done
-        echo "replicate: done (snap $STAMP; origin keeps $KEEP snapshots)"
+        # retention is SPACE-DRIVEN: history persists while a pool has room;
+        # below its free-space floor the oldest sync snapshots are destroyed,
+        # never the newest $KEEP (those carry the replication bases)
+        prune_oldest() { # <pool> <minFreeBytes> <dataset>
+          local POOL="$1" MINFREE="$2" DS="$3" AVAIL
+          AVAIL="$(zfs get -Hp -o value avail "$POOL")"
+          if [ "$AVAIL" -ge "$MINFREE" ]; then return 0; fi
+          echo "replicate: $POOL below free-space floor ($AVAIL < $MINFREE) — pruning oldest snapshots on $DS"
+          zfs list -t snapshot -o name -H -s creation "$DS" 2>/dev/null \
+            | grep -aF '@sync' | head -n -$KEEP | cut -d@ -f2 \
+            | sort -u | while IFS= read -r s; do
+                zfs destroy "$DS@$s" 2>/dev/null || true
+              done
+        }
+        prune_oldest ${zfsPoolPrimary} ${primaryPruneMinFree} ${zfsPoolPrimary}/nextcloud
+        prune_oldest ${zfsPoolPrimary} ${primaryPruneMinFree} ${zfsPoolPrimary}/archive
+        prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${zfsPoolBackup}/nextcloud-data
+        prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${zfsPoolBackup}/archive
+        echo "replicate: done (snap $STAMP; retention: keep $KEEP, prune only below free-space floors)"
       '';
 
       zfsVerifyMigration = pkgs.writeShellScriptBin "zfs-verify-migration" ''
