@@ -134,8 +134,15 @@
           || { echo "$SRC not mounted — run just drive-mount first" >&2; exit 1; }
         SRCDEV="$(findmnt -no SOURCE "$SRC" 2>/dev/null)" \
           || { echo "$SRC is not mounted" >&2; exit 1; }
-        PARENT="$(lsblk -no PKNAME "$SRCDEV" | tail -1)"; PARENT="/dev/$PARENT"
-        MODEL="$(lsblk -no MODEL "$PARENT")"
+        # hardware identity checks only for real disks (sandbox: loop devices
+        # have no parent drive; the volume label below is the assertion there)
+        # nix bakes primaryDiskModel at eval time — SC2157 sees a literal
+        # shellcheck disable=SC2157
+        if [ -n "${primaryDiskModel}" ]; then
+          PARENT="$(lsblk -no PKNAME "$SRCDEV" | tail -1)"; PARENT="/dev/$PARENT"
+          MODEL="$(lsblk -no MODEL "$PARENT")"
+          case "$MODEL" in *"${primaryDiskModel}"*) ;; *) echo "refusing: $SRCDEV is not the primary drive (model: $MODEL)" >&2; exit 1;; esac
+        fi
         LABEL="$(lsblk -no LABEL "$SRCDEV")"
         case "$MODEL" in *ST2000DL001*) ;; *) echo "refusing: $SRCDEV is not the primary drive (model: $MODEL)" >&2; exit 1;; esac
         [ "$LABEL" = "Data" ] || { echo "refusing: label is '$LABEL', expected 'Data'" >&2; exit 1; }
@@ -1428,10 +1435,15 @@
         fi
         # device triple-check
         test -b "${primaryDisk}" || { echo "no such device: ${primaryDisk} — reconnect sdc1" >&2; exit 1; }
-        MODEL="$(lsblk -no MODEL "${primaryDisk}")"
-        case "$MODEL" in *ST2000DL001*) ;; *) echo "refusing: wrong drive model $MODEL" >&2; exit 1;; esac
-        SZ="$(lsblk -b -no SIZE "${primaryDisk}")"
-        [ "$SZ" -gt 2000000000000 ] || { echo "size mismatch ($SZ)" >&2; exit 1; }
+        # shellcheck disable=SC2157
+        if [ -n "${primaryDiskModel}" ]; then
+          MODEL="$(lsblk -no MODEL "${primaryDisk}")"
+          case "$MODEL" in *"${primaryDiskModel}"*) ;; *) echo "refusing: wrong drive model $MODEL" >&2; exit 1;; esac
+          SZ="$(lsblk -b -no SIZE "${primaryDisk}")"
+          if [ -n "${primaryDiskMinSize}" ]; then
+            [ "$SZ" -ge "${primaryDiskMinSize}" ] || { echo "size mismatch ($SZ)" >&2; exit 1; }
+          fi
+        fi
         findmnt "${primaryDisk}" >/dev/null 2>&1 \
           && { echo "refusing: ${primaryDisk} is mounted" >&2; exit 1; }
         zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolPrimary} \
