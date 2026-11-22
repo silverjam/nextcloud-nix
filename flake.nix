@@ -1403,27 +1403,45 @@
         fi
         findmnt "${primaryDisk}" >/dev/null 2>&1 \
           && { echo "refusing: ${primaryDisk} is mounted" >&2; exit 1; }
-        zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolPrimary} \
-          && { echo "pool 'primary' already exists" >&2; exit 1; }
-        # maintenance + pause timers + preserve the current datadir
-        nix run .#occ -- maintenance:mode --on >/dev/null 2>&1 || true
-        nix run .#apply-config >/dev/null 2>&1 || true
-        systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-init \
-          nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer \
-          nextcloud-provision.service nextcloud-cron.timer 2>/dev/null || true
-        SAVED="${backupRoot}/pre-zfs-datadir-$(date +%Y%m%d-%H%M%S).tar.gz"
-        tar czf "$SAVED" -C /var/lib/nextcloud data
-        echo "primary: datadir safety tar at $SAVED"
-        mv /var/lib/nextcloud/data /var/lib/nextcloud/data.pre-zfs
-        mkdir -p /var/lib/nextcloud/data
-        echo "primary: creating zpool (DESTROYS ${primaryDisk} NTFS content)"
-        zpool create -f -o ashift=12 -O compression=lz4 -O xattr=sa \
-          -O acltype=posixacl -O atime=off ${zfsPoolPrimary} "${primaryDisk}"
-        zfs create -o mountpoint=/var/lib/nextcloud/data ${zfsPoolPrimary}/nextcloud
-        zfs create -o mountpoint=/mnt/archive ${zfsPoolPrimary}/archive
-        chown -R nextcloud:nextcloud /var/lib/nextcloud/data
-        echo "primary: restoring nc datadir from the safety tar"
-        tar xzf "$SAVED" -C /var/lib/nextcloud
+        # resumable: an interrupted run leaves the pool (and the datadir on
+        # it) in place — skip creation, heal the mounts, resume the import
+        RESUME=0
+        if zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolPrimary}; then
+          RESUME=1
+          echo "primary: pool exists — resuming phase 2 (no recreation)"
+          zpool clear ${zfsPoolPrimary} 2>/dev/null || zpool clear -F ${zfsPoolPrimary} 2>/dev/null || true
+          zfs mount -a 2>/dev/null || true
+          findmnt -no SOURCE /var/lib/nextcloud/data | grep -q "${zfsPoolPrimary}/nextcloud" \
+            || { echo "datadir is not ${zfsPoolPrimary}/nextcloud — cannot resume safely" >&2; exit 1; }
+          zfs list -H -o name ${zfsPoolPrimary}/archive >/dev/null 2>&1 \
+            || { echo "${zfsPoolPrimary}/archive missing — cannot resume safely" >&2; exit 1; }
+        fi
+        if [ "$RESUME" = 1 ]; then
+          echo "primary: datadir already on zfs — skipping creation/restore"
+        else
+          if [ -f ${migrationState}/phase2-complete ]; then
+            echo "refusing: phase-2 already stamped but pool missing — needs manual recovery" >&2
+            exit 1
+          fi
+          # maintenance + pause timers + preserve the current datadir
+          nix run .#occ -- maintenance:mode --on >/dev/null 2>&1 || true
+          nix run .#apply-config >/dev/null 2>&1 || true
+          systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-init \
+            nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer \
+            nextcloud-provision.service nextcloud-cron.timer 2>/dev/null || true
+          SAVED="${backupRoot}/pre-zfs-datadir-$(date +%Y%m%d-%H%M%S).tar.gz"
+          tar czf "$SAVED" -C /var/lib/nextcloud data
+          echo "primary: datadir safety tar at $SAVED"
+          mv /var/lib/nextcloud/data /var/lib/nextcloud/data.pre-zfs
+          mkdir -p /var/lib/nextcloud/data
+          echo "primary: creating zpool (DESTROYS ${primaryDisk} NTFS content)"
+          zpool create -f -o ashift=12 -O compression=lz4 -O xattr=sa \
+            -O acltype=posixacl -O atime=off ${zfsPoolPrimary} "${primaryDisk}"
+          zfs create -o mountpoint=/var/lib/nextcloud/data ${zfsPoolPrimary}/nextcloud
+          zfs create -o mountpoint=/mnt/archive ${zfsPoolPrimary}/archive
+          echo "primary: restoring nc datadir from the safety tar"
+          tar xzf "$SAVED" -C /var/lib/nextcloud
+        fi
         chown -R nextcloud:nextcloud /var/lib/nextcloud/data
         echo "primary: importing personal content from $ARCHIVE_SRC -> /mnt/archive"
         rsync -aH --numeric-ids --info=progress2 \

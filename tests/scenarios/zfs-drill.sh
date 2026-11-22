@@ -88,6 +88,11 @@ M="$(Q "SELECT count(*) FROM oc_preferences WHERE userid='admin' AND appid='upgr
 expect_equal "1" "$M" "db marker survived the datadir move"
 ok "NC live on drill-primary/nextcloud"
 
+step "resume path: rerun create-primary on the existing pool"
+CONFIRM=primary nix run .#zfs-create-primary
+findmnt -no FSTYPE /var/lib/nextcloud/data | grep -q zfs || fail "datadir not zfs after resume"
+ok "resume path (import + verify, no recreation)"
+
 step "phase 3: backup zfs pool + replica seed"
 CONFIRM=backup nix run .#zfs-create-backup
 findmnt -no TARGET /var/backups/zfs-replica >/dev/null || fail "replica not mounted"
