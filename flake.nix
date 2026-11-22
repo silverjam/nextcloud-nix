@@ -182,6 +182,29 @@
         echo "disaster mirror removed — $(df -h / | tail -1 | awk '{print $4}') free on /"
       '';
 
+      zfsProvisionedPasswords = pkgs.writeShellScriptBin "provisioned-passwords" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        UIDF="''${1:-}"
+        found=0
+        for f in ${ncRoot}/provision-credentials-*.log; do
+          [ -f "$f" ] || continue
+          if [ -n "$UIDF" ]; then
+            grep -a "^uid=$UIDF " "$f" && found=1
+          else
+            cat "$f" && found=1
+          fi
+        done
+        if [ "$found" = 0 ]; then
+          echo "(no provisioned credentials on file)"
+          exit 0
+        fi
+        echo
+        echo "NOTE: these are the initial passwords generated at user creation."
+        echo "If a password was changed afterwards (user:resetpassword / web UI),"
+        echo "the current one differs."
+      '';
+
       primaryDisk = "/dev/disk/by-id/ata-ST2000DL001-9VT156_5YD1BHCZ-part1"; # sdc1, USB3
       backupDisk = "/dev/disk/by-id/ata-ST2000DL003-9VT166_6YD055P4-part1"; # sdb1
       zfsPoolPrimary = "primary";
@@ -260,7 +283,13 @@
       #   provisionedUsers = {
       #     alice = { displayName = "Alice"; quota = "2 GB"; groups = [ "family" ]; };
       #   };
-      provisionedUsers = { };
+      provisionedUsers = { 
+        jason = { displayName = "Jason Mobarak"; groups = ["family" "parents"]; };
+        josphine = { displayName = "Josephine Sheng"; groups = ["family" "parents"]; };
+        addie = { displayName = "Addie Mobarak"; groups = ["family" "kids"]; };
+        thaelia = { displayName = "Thaelia Mobarak"; groups = ["family" "kids"]; };
+        richard = { displayName = "Richard Mobarak"; groups = ["family"]; };
+      };
       # Explicit removal list — the ONLY way a provisioned user is deleted.
       # For each entry that still exists, a per-user backup is taken first
       # (files + full pg_dump into /var/backups/nextcloud/deprovisioned/<uid>/<ts>/)
@@ -1709,6 +1738,7 @@
         "zfs-replicate" = zfsReplicate;
         "zfs-verify-migration" = zfsVerifyMigration;
         "zfs-check" = zfsCheck;
+        "provisioned-passwords" = zfsProvisionedPasswords;
         nextcloud = nc;
         php = phpEnv;
         postgresql = pg;

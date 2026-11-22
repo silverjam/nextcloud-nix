@@ -73,6 +73,10 @@ zfs-check:
 zfs-verify-migration:
     nix run .#zfs-verify-migration
 
+# show the one-shot passwords generated for provisioned users (optional uid filter)
+provisioned-passwords uid="":
+    nix run .#provisioned-passwords -- {{ uid }}
+
 # list restic snapshots (+ sizes)
 backup-list:
     nix run .#nc-backup -- list
