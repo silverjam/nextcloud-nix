@@ -354,6 +354,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           echo "archive: shared '$NAME' with member $m (${archiveSharePerms})"
         done
         [ "$CREATED" = 0 ] && echo "archive: member shares already present for all of ${archiveShareGroup}"
+        # share-aware filecache refresh: after the shares exist, a second scan
+        # updates the shared nodes' cached permissions — without it the
+        # recipients' DAV resolves the subtree 404 on write ops (delete etc.)
+        OCC files:scan --path="${archiveOwner}/files/$NAME" 2>&1 | tail -4
         echo "archive: '$NAME' shared with ${archiveShareGroup} members (interim bind; option B replaces it)"
       '';
 
