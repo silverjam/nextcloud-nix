@@ -200,7 +200,10 @@
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
         # sudo env_reset strips PATH; re-arm what the tail may need
         export PATH="/nix/var/nix/profiles/default/bin:$PATH"
-        OCC() { ${phpEnv}/bin/php ${nc}/occ "$@"; }
+        OCC() {
+          /usr/bin/sudo -u ${ncUser} env HOME=${ncRoot} NEXTCLOUD_CONFIG_DIR=${ncConfig} \
+            ${phpEnv}/bin/php ${nc}/occ "$@"
+        }
 
         # gates: only after a verified migration, with the owner provisioned
         test -f ${migrationState}/migration-complete \
