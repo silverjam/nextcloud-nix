@@ -66,6 +66,133 @@
       dataSyncTarget = "${backupRoot}/data";
       dataSyncTrashDays = "30"; # deletions preserved in <target>/.trash for this many days
 
+      # ------------------------------------------------------------------
+      # ZFS storage migration (primary + backup pools); see README "Storage"
+      # ------------------------------------------------------------------
+      # ------------------------------------------------------------------
+      # ZFS migration recipes (host tools; self-promote via sudo) — see
+      # README "Storage: migrating to ZFS" for the phase-by-phase procedure
+      # ------------------------------------------------------------------
+      zfsInstall = pkgs.writeShellScriptBin "zfs-install" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq && apt-get install -y -qq zfsutils-linux >/dev/null
+        modprobe zfs 2>/dev/null || true
+        echo "options zfs zfs_arc_max=${arcMax}" > /etc/modprobe.d/zfs-arc.conf
+        echo "${arcMax}" > /sys/module/zfs/parameters/zfs_arc_max 2>/dev/null || true
+        systemctl enable --now zfs-import-cache.service zfs-mount.service 2>/dev/null || true
+        test -f /lib/systemd/system-generators/zfs-mount-generator \
+          || { echo "zfs-mount-generator missing" >&2; exit 1; }
+        mkdir -p ${migrationState}
+        echo "zfs-ready: $(zfs version | head -1)"
+      '';
+
+      zfsRehearse = pkgs.writeShellScriptBin "zfs-rehearse" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        W="/var/backups/zfs-rehearsal-$(date +%s)"
+        mkdir -p "$W"
+        cleanup() {
+          zpool destroy rehearse2 2>/dev/null || true
+          zpool destroy rehearse1 2>/dev/null || true
+          umount /rehearse1/data /rehearse2/replica 2>/dev/null || true
+          losetup -d "$LO1" "$LO2" 2>/dev/null || true
+          rm -rf "$W"
+        }
+        trap cleanup EXIT
+        truncate -s 512M "$W/a.img"; truncate -s 512M "$W/b.img"
+        LO1="$(losetup --find --show "$W/a.img")"
+        LO2="$(losetup --find --show "$W/b.img")"
+        echo "[rehearse] throwaway pool create (loopfile)"
+        zpool create -f -o ashift=12 -O compression=on -O xattr=sa \
+          -O acltype=posixacl -O atime=off rehearse1 "$LO1"
+        zfs create rehearse1/data
+        printf 'line-1\nline-2\nline-3\nline-4\nline-5\n' > /rehearse1/data/f.txt
+        zfs snapshot rehearse1/data@t1
+        printf 'line-6\n' > /rehearse1/data/g.txt
+        zfs snapshot rehearse1/data@t2
+        zpool create -f -o ashift=12 rehearse2 "$LO2"
+        echo "[rehearse] full zfs send | receive"
+        zfs send -R rehearse1/data@t2 | zfs receive -F rehearse2/replica
+        cmp /rehearse1/data/f.txt /rehearse2/replica/f.txt
+        cmp /rehearse1/data/g.txt /rehearse2/replica/g.txt
+        echo "[rehearse] incremental send | receive"
+        printf 'line-7\n' > /rehearse1/data/h.txt
+        zfs snapshot rehearse1/data@t3
+        zfs send -I rehearse1/data@t2 rehearse1/data@t3 | zfs receive -F rehearse2/replica
+        cmp /rehearse1/data/h.txt /rehearse2/replica/h.txt
+        echo "[rehearse] PASS — create/dataset/snapshot/incremental/replicate all verified on a throwaway pool"
+      '';
+
+      zfsDisasterCreate = pkgs.writeShellScriptBin "zfs-disaster-mirror-create" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        SRC="${ntfsSrcMount}"
+        SRCDEV="$(findmnt -no SOURCE "$SRC" 2>/dev/null)" \
+          || { echo "$SRC is not mounted" >&2; exit 1; }
+        PARENT="$(lsblk -no PKNAME "$SRCDEV" | tail -1)"; PARENT="/dev/$PARENT"
+        MODEL="$(lsblk -no MODEL "$PARENT")"
+        LABEL="$(lsblk -no LABEL "$SRCDEV")"
+        case "$MODEL" in *ST2000DL001*) ;; *) echo "refusing: $SRCDEV is not the primary drive (model: $MODEL)" >&2; exit 1;; esac
+        [ "$LABEL" = "Data" ] || { echo "refusing: label is '$LABEL', expected 'Data'" >&2; exit 1; }
+        echo "disaster-mirror: rsync $SRC ($SRCDEV, $MODEL) -> ${disasterMirror}"
+        install -d -m 0755 "${disasterMirror}"
+        rsync -aHAX --numeric-ids --info=progress2 \
+          --exclude='/$RECYCLE.BIN' --exclude='/System Volume Information' \
+          "$SRC"/ "${disasterMirror}"/
+        FS="$(find "$SRC" -type f ! -path '*RECYCLE*' ! -path '*System Volume*' | wc -l)"
+        FD="$(find "${disasterMirror}" -type f | wc -l)"
+        echo "disaster-mirror: files src=$FS dst=$FD"
+        [ "$FD" -ge "$FS" ] || { echo "file count mismatch — rerun to complete" >&2; exit 1; }
+        echo "disaster-mirror: spot-checksums (250 random files)"
+        BAD=0; N=0
+        while IFS= read -r f; do
+          rel="''${f#"$SRC"/}"
+          N=$((N+1))
+          cmp -s "$f" "${disasterMirror}/$rel" || { bad=$((bad+1)); echo "  mismatch: $rel" >&2; }
+        done < <(find "$SRC" -type f ! -path '*RECYCLE*' ! -path '*System Volume*' | shuf -n 250 --random-source=<(yes))
+        [ "$bad" = 0 ] || { echo "$bad spot-check mismatches" >&2; exit 1; }
+        test "$N" -ge 250 || true
+        mkdir -p ${migrationState}
+        touch ${migrationState}/disaster-mirror-verified
+        echo "disaster-mirror: verified ($(du -sh ${disasterMirror} 2>/dev/null | cut -f1) total, $FD files)"
+      '';
+
+      zfsDisasterCheck = pkgs.writeShellScriptBin "zfs-disaster-mirror-check" ''
+        set -euo pipefail
+        test -f ${migrationState}/disaster-mirror-verified \
+          && echo "verified" || echo "not verified yet"
+        du -sh ${disasterMirror} 2>/dev/null || echo "(missing)"
+        echo "files: $(find ${disasterMirror} -type f 2>/dev/null | wc -l)"
+      '';
+
+      # interlocked: only after the migration-complete stamp (final verify)
+      zfsDisasterRemove = pkgs.writeShellScriptBin "zfs-disaster-mirror-remove" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        test -f ${migrationState}/migration-complete \
+          || { echo "refusing: migration-complete stamp missing (run zfs-verify-migration first)" >&2; exit 1; }
+        [ "''${CONFIRM:-}" = "disaster" ] \
+          || { echo "set CONFIRM=disaster to remove ${disasterMirror}" >&2; exit 1; }
+        rm -rf "${disasterMirror}"
+        echo "disaster mirror removed — $(df -h / | tail -1 | awk '{print $4}') free on /"
+      '';
+
+      primaryDisk = "/dev/disk/by-id/ata-ST2000DL001-9VT156_5YD1BHCZ-part1"; # sdc1, USB3
+      backupDisk = "/dev/disk/by-id/ata-ST2000DL003-9VT166_6YD055P4-part1"; # sdb1
+      zfsPoolPrimary = "primary";
+      zfsPoolBackup = "backup";
+      ncDataset = "${zfsPoolPrimary}/nextcloud"; # mounts at the nc datadir
+      archiveDataset = "${zfsPoolPrimary}/archive"; # personal content, /mnt/archive
+      replicaDataset = "${zfsPoolBackup}/nextcloud-data";
+      replicaMount = "/var/backups/zfs-replica";
+      arcMax = "8589934592"; # 8G of 30G RAM
+      zfsKeepSnapshots = "48"; # replication snapshots kept per dataset
+      migrationState = "${backupRoot}/migration-state"; # interlock stamps
+      disasterMirror = "/var/backups/disaster-mirror-sdc1"; # root-disk full copy
+      ntfsSrcMount = "/mnt"; # sdc1 (label "Data") as auto-mounted by udisks
+
       # Optional DECLARATIVE user provisioning (creation-side only).
       # Users are runtime state like files — removal from this list is a
       # no-op (never delete a user from config), and passwords of existing
@@ -81,7 +208,7 @@
       # and the deletion aborts if that backup cannot be verified. Entries
       # are self-draining: once the user is gone they are a no-op.
       deprovisionedUsers = [ ];
-      # rendered per-user specs: uid<TAB>display<TAB>quota<HAB>groups(;-sep)
+      # render per-user specs: uid<TAB>display<TAB>quota<HAB>groups(;-sep)
       provisionSpecLines = lib.mapAttrsToList
         (name: u:
           lib.concatStringsSep "\t" [
@@ -1130,8 +1257,209 @@
       '';
 
       # ------------------------------------------------------------------
-      # declarative user provisioning (creation-side; see provisionedUsers)
+      # ZFS pools + replication (phase interlocks enforced via stamps)
       # ------------------------------------------------------------------
+      zfsMirrorNtfs = pkgs.writeShellScriptBin "zfs-mirror-ntfs" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        # interlock: the local disaster mirror must be verified first
+        test -f ${migrationState}/disaster-mirror-verified \
+          || { echo "refusing: run zfs-disaster-mirror-create first" >&2; exit 1; }
+        BDEV="${backupDisk}"
+        test -b "$BDEV" || { echo "$BDEV missing — reconnect sdb1 (and let it auto-mount or mount ntfs3)" >&2; exit 1; }
+        M="/var/backups/ntfs-sdb1-mnt"
+        mkdir -p "$M"
+        if ! findmnt -S "$BDEV" >/dev/null 2>&1; then
+          mount -t ntfs3 "$BDEV" "$M"
+        fi
+        cleanup() { umount "$M" 2>/dev/null || true; }
+        trap cleanup EXIT
+        S="${ntfsSrcMount}"
+        findmnt -no SOURCE "$S" 2>/dev/null >/dev/null \
+          || { echo "primary NTFS ($S) not mounted — reconnect sdc1 and let it auto-mount at $S" >&2; exit 1; }
+        echo "zfs-mirror-ntfs: rsync $S -> $M (sdc1 → sdb1, phase 1)"
+        rsync -aHAX --numeric-ids --info=progress2 \
+          --exclude='/$RECYCLE.BIN' --exclude='/System Volume Information' \
+          "$S"/ "$M"/
+        FS="$(find "$S" -type f ! -path '*RECYCLE*' ! -path '*System Volume*' | wc -l)"
+        FD="$(find "$M" -type f | wc -l)"
+        echo "zfs-mirror-ntfs: files src=$FS dst=$FD"
+        [ "$FD" -ge "$FS" ] || { echo "count mismatch — rerun to complete" >&2; exit 1; }
+        BAD=0
+        while IFS= read -r f; do
+          rel="''${f#"$S"/}"
+          cmp -s "$f" "$M/$rel" || { BAD=$((BAD+1)); echo "  mismatch: $rel" >&2; }
+        done < <(find "$S" -type f ! -path '*RECYCLE*' ! -path '*System Volume*' | shuf -n 250 --random-source=<(yes))
+        [ "$BAD" = 0 ] || { echo "$BAD spot-check mismatches" >&2; exit 1; }
+        printf 'verified %s files=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$FD" \
+          > "$M/phase1-verified.stamp"
+        echo "zfs-mirror-ntfs: verified — phase-1 interlock stamp written into the sdb1 mirror"
+      '';
+
+      zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        [ "''${CONFIRM:-}" = "primary" ] \
+          || { echo "This DESTROYS ${primaryDisk} (sdc1 NTFS). A verified copy exists on sdb1 (see zfs-mirror-ntfs)." >&2
+               echo "Set CONFIRM=primary to proceed." >&2; exit 1; }
+        # interlock 1: the phase-1 stamp lives in the sdb1 NTFS mirror
+        M="/var/backups/ntfs-sdb1-mnt"; mkdir -p "$M"
+        if ! findmnt -S "${backupDisk}" >/dev/null 2>&1; then
+          mount -t ntfs3 -o ro "${backupDisk}" "$M"
+        fi
+        test -f "$M/phase1-verified.stamp" \
+          || { echo "refusing: phase-1 interlock stamp missing in the sdb1 mirror" >&2; exit 1; }
+        umount "$M" 2>/dev/null || true
+        # device triple-check
+        test -b "${primaryDisk}" || { echo "no such device: ${primaryDisk} — reconnect sdc1" >&2; exit 1; }
+        MODEL="$(lsblk -no MODEL "${primaryDisk}")"
+        case "$MODEL" in *ST2000DL001*) ;; *) echo "refusing: wrong drive model $MODEL" >&2; exit 1;; esac
+        SZ="$(lsblk -b -no SIZE "${primaryDisk}")"
+        [ "$SZ" -gt 2000000000000 ] || { echo "size mismatch ($SZ)" >&2; exit 1; }
+        findmnt "${primaryDisk}" >/dev/null 2>&1 \
+          && { echo "refusing: ${primaryDisk} is mounted" >&2; exit 1; }
+        zpool list -H -o name 2>/dev/null | grep -qx primary \
+          && { echo "pool 'primary' already exists" >&2; exit 1; }
+        # maintenance + pause timers + preserve the current datadir
+        nix run .#occ -- maintenance:mode --on >/dev/null 2>&1 || true
+        systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-init \
+          nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer \
+          nextcloud-provision.service nextcloud-cron.timer 2>/dev/null || true
+        SAVED="${backupRoot}/pre-zfs-datadir-$(date +%Y%m%d-%H%M%S).tar.gz"
+        tar czf "$SAVED" -C /var/lib/nextcloud data
+        echo "primary: datadir safety tar at $SAVED"
+        mv /var/lib/nextcloud/data /var/lib/nextcloud/data.pre-zfs
+        mkdir -p /var/lib/nextcloud/data
+        echo "primary: creating zpool (DESTROYS ${primaryDisk} NTFS content)"
+        zpool create -f -o ashift=12 -O compression=lz4 -O xattr=sa \
+          -O acltype=posixacl -O atime=off primary "${primaryDisk}"
+        zfs create -o mountpoint=/var/lib/nextcloud/data primary/nextcloud
+        zfs create -o mountpoint=/mnt/archive primary/archive
+        chown -R nextcloud:nextcloud /var/lib/nextcloud/data
+        echo "primary: restoring nc datadir from the safety tar"
+        tar xzf "$SAVED" -C /var/lib/nextcloud
+        chown -R nextcloud:nextcloud /var/lib/nextcloud/data
+        echo "primary: importing personal archive from the sdb1 NTFS mirror -> /mnt/archive"
+        M="/var/backups/ntfs-sdb1-mnt"
+        if ! findmnt -S "${backupDisk}" >/dev/null 2>&1; then
+          mount -t ntfs3 -o ro "${backupDisk}" "$M"
+        fi
+        rsync -aH --numeric-ids --info=progress2 \
+          --exclude='phase1-verified.stamp' \
+          "$M"/ /mnt/archive/
+        FS="$(find "$M" -type f ! -name 'phase1-verified.stamp' | wc -l)"
+        FA="$(find /mnt/archive -type f | wc -l)"
+        echo "primary: archive files mirrored=$FS imported=$FA"
+        umount "$M" 2>/dev/null || true
+        systemctl start nextcloud-fpm nextcloud-caddy nextcloud-init.service 2>/dev/null || true
+        nix run .#occ -- maintenance:mode --off >/dev/null 2>&1 || true
+        nix run .#occ -- status | grep -q 'installed: true' \
+          || { echo "nextcloud not healthy after migration" >&2; exit 1; }
+        install -d -m 0755 ${migrationState}
+        touch ${migrationState}/phase2-complete
+        echo "primary: phase-2 complete — NC is live on the zfs datadir; personal archive at /mnt/archive"
+      '';
+
+      zfsCreateBackup = pkgs.writeShellScriptBin "zfs-create-backup" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        test -f ${migrationState}/phase2-complete \
+          || { echo "refusing: phase-2 stamp missing (run zfs-create-primary first)" >&2; exit 1; }
+        [ "''${CONFIRM:-}" = "backup" ] \
+          || { echo "This DESTROYS ${backupDisk} (sdb1 NTFS mirror). The primary zfs datasets are the verified copies now." >&2
+               echo "Set CONFIRM=backup to proceed." >&2; exit 1; }
+        test -b "${backupDisk}" || { echo "no such device: ${backupDisk} — reconnect sdb1" >&2; exit 1; }
+        if findmnt -S "${backupDisk}" >/dev/null 2>&1; then
+          echo "refusing: ${backupDisk} is mounted" >&2; exit 1
+        fi
+        zpool list -H -o name 2>/dev/null | grep -qx backup \
+          && { echo "pool 'backup' already exists" >&2; exit 1; }
+        echo "backup: creating zpool (DESTROYS ${backupDisk} NTFS mirror copy)"
+        zpool create -f -o ashift=12 -O compression=on -O xattr=sa \
+          -O acltype=posixacl -O atime=off \
+          -O mountpoint=${replicaMount} backup "${backupDisk}"
+        TS="$(date +%Y%m%d%H%M%S)"
+        zfs snapshot -r primary@seed-$TS
+        echo "backup: seeding replica via zfs send/receive"
+        zfs send -R primary/nextcloud@seed-$TS | zfs receive -F ${replicaDataset}
+        zfs send -R primary/archive@seed-$TS | zfs receive -F backup/archive
+        FB="$(find ${replicaMount}/nextcloud-data -type f 2>/dev/null | wc -l)"
+        FA="$(find ${replicaMount}/archive -type f 2>/dev/null | wc -l)"
+        echo "backup: replica files: nextcloud-data=$FB archive=$FA"
+        touch ${migrationState}/phase3-complete
+        echo "backup: phase-3 complete — replica seeded on the backup drive"
+      '';
+
+      zfsReplicate = pkgs.writeShellScriptBin "zfs-replicate" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        zpool list -H -o name 2>/dev/null | grep -qx primary \
+          || { echo "primary pool missing" >&2; exit 1; }
+        zpool list -H -o name 2>/dev/null | grep -qx backup \
+          || { echo "backup pool missing" >&2; exit 1; }
+        STAMP="sync-$(date +%Y%m%d%H%M%S)"
+        PREV_NC="$(zfs list -t snapshot -o name -H -s creation primary/nextcloud | tail -1 | cut -d@ -f2 || true)"
+        PREV_AR="$(zfs list -t snapshot -o name -H -s creation primary/archive | tail -1 | cut -d@ -f2 || true)"
+        zfs snapshot primary/nextcloud@$STAMP
+        zfs snapshot primary/archive@$STAMP
+        if [ -n "$PREV_NC" ]; then
+          zfs send -I primary/nextcloud@$PREV_NC primary/nextcloud@$STAMP \
+            | zfs receive -F ${replicaDataset}
+        else
+          zfs send -R primary/nextcloud@$STAMP | zfs receive -F ${replicaDataset}
+        fi
+        if [ -n "$PREV_AR" ]; then
+          zfs send -I primary/archive@$PREV_AR primary/archive@$STAMP \
+            | zfs receive -F backup/archive
+        else
+          zfs send -R primary/archive@$STAMP | zfs receive -F backup/archive
+        fi
+        date -u +"%Y-%m-%dT%H:%M:%SZ snap=$STAMP" > /primary/.last-replication
+        KEEP=$(( ${zfsKeepSnapshots} ))
+        zfs list -t snapshot -o name -H -s creation -r primary 2>/dev/null \
+          | grep -v seed | grep '@' | head -n +$((KEEP + 1)) | cut -d@ -f2 \
+          | sort -u | while IFS= read -r s; do
+              zfs destroy "primary/nextcloud@$s" 2>/dev/null || true
+              zfs destroy "primary/archive@$s" 2>/dev/null || true
+            done
+        echo "replicate: done (snap $STAMP; origin keeps $KEEP snapshots)"
+      '';
+
+      zfsVerifyMigration = pkgs.writeShellScriptBin "zfs-verify-migration" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        test -f ${migrationState}/phase3-complete \
+          || { echo "refusing: phase-3 stamp missing (run zfs-create-backup first)" >&2; exit 1; }
+        zpool status primary 2>/dev/null | grep -q ONLINE \
+          || { echo "primary not ONLINE" >&2; exit 1; }
+        zpool status backup 2>/dev/null | grep -q ONLINE \
+          || { echo "backup not ONLINE" >&2; exit 1; }
+        findmnt -no TARGET /var/lib/nextcloud/data \
+          | grep -q primary || { echo "datadir not a zfs mount" >&2; exit 1; }
+        systemctl is-active --quiet nextcloud-fpm nextcloud-db nextcloud-caddy \
+          || { echo "stack not healthy" >&2; exit 1; }
+        REP="$(find ${replicaMount} -type f 2>/dev/null | wc -l)"
+        [ "$REP" -ge 1 ] || { echo "replica empty" >&2; exit 1; }
+        touch ${migrationState}/migration-complete
+        echo "migration verified — the local disaster mirror may now be removed (zfs-disaster-mirror-remove)"
+      '';
+
+      zfsCheck = pkgs.writeShellScriptBin "zfs-check" ''
+        set -euo pipefail
+        echo "== zpool status =="
+        zpool status -v 2>/dev/null | head -24 || true
+        echo "== datasets =="
+        zfs list 2>/dev/null || true
+        echo "== snapshots (last 12) =="
+        zfs list -t snapshot -o name,creation -s creation 2>/dev/null | tail -12 || true
+        echo "== datadir mount =="
+        findmnt -no TARGET,SOURCE,FSTYPE /var/lib/nextcloud/data 2>/dev/null || true
+        echo "== last replication =="
+        cat /primary/.last-replication 2>/dev/null || echo "(never)"
+        echo "== migration state =="
+        ls ${migrationState} 2>/dev/null || true
+      '';
+
       ncProvisionJob = pkgs.writeShellScriptBin "nc-provision" ''
         set -euo pipefail
         export PATH="/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -1296,6 +1624,17 @@
         "nc-restore" = ncRestoreJob;
         "nc-data-sync" = ncDataSyncJob;
         "nc-provision" = ncProvisionJob;
+        "zfs-install" = zfsInstall;
+        "zfs-rehearse" = zfsRehearse;
+        "zfs-disaster-mirror-create" = zfsDisasterCreate;
+        "zfs-disaster-mirror-check" = zfsDisasterCheck;
+        "zfs-disaster-mirror-remove" = zfsDisasterRemove;
+        "zfs-mirror-ntfs" = zfsMirrorNtfs;
+        "zfs-create-primary" = zfsCreatePrimary;
+        "zfs-create-backup" = zfsCreateBackup;
+        "zfs-replicate" = zfsReplicate;
+        "zfs-verify-migration" = zfsVerifyMigration;
+        "zfs-check" = zfsCheck;
         nextcloud = nc;
         php = phpEnv;
         postgresql = pg;

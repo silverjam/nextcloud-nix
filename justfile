@@ -17,13 +17,52 @@ backup:
 snapshot:
     sudo systemctl start --wait nextcloud-snapshot.service
 
-# mirror user data/ to dataSyncTarget now (hourly timer also does this)
-sync-data:
-    sudo systemctl start --wait nextcloud-data-sync.service
-
 # apply provisionedUsers (declarative user creation; also runs per deploy)
 provision:
     sudo systemctl start --wait nextcloud-provision.service
+
+# ZFS migration phase 0: install tooling + ARC cap (safe; no drives needed)
+zfs-install:
+    nix run .#zfs-install
+
+# ZFS migration phase 0: rehearse the whole lifecycle on throwaway loop pools
+zfs-rehearse:
+    nix run .#zfs-rehearse
+
+# phase 0.5: full local disaster mirror of sdc1 onto the root disk
+zfs-disaster-mirror-create:
+    nix run .#zfs-disaster-mirror-create
+zfs-disaster-mirror-check:
+    nix run .#zfs-disaster-mirror-check
+zfs-disaster-mirror-remove:
+    nix run .#zfs-disaster-mirror-remove
+
+# phase 1: mirror sdc1 -> sdb1 (NTFS→NTFS rsync + verification)
+zfs-mirror-ntfs:
+    nix run .#zfs-mirror-ntfs
+
+# phase 2/3 (DESTRUCTIVE — both require a typed CONFIRM)
+zfs-create-primary:
+    nix run .#zfs-create-primary
+zfs-create-backup:
+    nix run .#zfs-create-backup
+
+# ongoing: snapshot + incremental zfs send/receive (replaces rsync mirror)
+sync-data:
+    #!/usr/bin/env bash
+    if [ -f /var/backups/nextcloud/migration-state/migration-complete ]; then
+      nix run .#zfs-replicate
+    else
+      sudo systemctl start --wait nextcloud-data-sync.service
+    fi
+
+# status: pools, datasets, snapshots, mounts, migration stamps
+zfs-check:
+    nix run .#zfs-check
+
+# final verification of the whole migration (enables disaster-mirror removal)
+zfs-verify-migration:
+    nix run .#zfs-verify-migration
 
 # list restic snapshots (+ sizes)
 backup-list:
