@@ -1386,7 +1386,9 @@
         findmnt -no SOURCE "$S" 2>/dev/null >/dev/null \
           || { echo "primary NTFS ($S) not mounted — reconnect sdc1 and let it auto-mount at $S" >&2; exit 1; }
         echo "zfs-mirror-ntfs: rsync $S -> $M (sdc1 → sdb1, phase 1)"
-        rsync -aHAX --numeric-ids --info=progress2 \
+        # -xX dropped: NTFS-internal xattrs ($LXUID/$LXMOD/…) can't persist
+        # across the ntfs3/ext4 boundary or onto plain NTFS re-mounts
+        rsync -aH --numeric-ids --info=progress2 \
           --exclude='/$RECYCLE.BIN' --exclude='/System Volume Information' \
           "$S"/ "$M"/
         FS="$(find "$S" -type f ! -path '*RECYCLE*' ! -path '*System Volume*' | wc -l)"
