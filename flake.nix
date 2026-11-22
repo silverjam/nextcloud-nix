@@ -234,8 +234,8 @@
           fi
           dev="/dev/disk/by-uuid/$uuid"
           if [ ! -b "$dev" ]; then
-            echo "drives-mount: $dev missing — is that drive connected?" >&2
-            exit 1
+            echo "drives-mount: WARNING $dev not connected — skipping (phases needing it will refuse)"
+            continue
           fi
           install -d -m 0755 "$mp"
           mount -t ntfs3 -o ro,force "$dev" "$mp"
