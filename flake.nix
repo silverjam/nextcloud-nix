@@ -1373,12 +1373,16 @@
           || { echo "refusing: run zfs-disaster-mirror-create first" >&2; exit 1; }
         BDEV="${backupDisk}"
         test -b "$BDEV" || { echo "$BDEV missing — reconnect sdb1 (and let it auto-mount or mount ntfs3)" >&2; exit 1; }
-        M="/var/backups/ntfs-sdb1-mnt"
-        mkdir -p "$M"
-        if ! findmnt -S "$BDEV" >/dev/null 2>&1; then
+        # reuse an existing mount of the backup NTFS (drive-mount); mount at a
+        # scratch point otherwise and unmount when done
+        if findmnt -S "$BDEV" >/dev/null 2>&1; then
+          M="$(findmnt -no TARGET -S "$BDEV")"; MOUNTED_BY_US=0
+        else
+          M="/var/backups/ntfs-sdb1-mnt"; mkdir -p "$M"; MOUNTED_BY_US=1
           mount -t ntfs3 "$BDEV" "$M"
         fi
-        cleanup() { umount "$M" 2>/dev/null || true; }
+        MOUNTED_BY_US=0
+        cleanup() { [ "$MOUNTED_BY_US" = 1 ] && umount "$M" 2>/dev/null || true; }
         trap cleanup EXIT
         S="${primaryMount}"
         findmnt -no SOURCE "$S" >/dev/null 2>&1 \
