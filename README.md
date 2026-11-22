@@ -370,6 +370,21 @@ The cert for `<node>.<tailnet>.ts.net` is publicly trusted (Let's Encrypt, issue
 by tailscaled automatically) — no custom CA on clients. LAN access over plain
 HTTP keeps working; nothing changes for caddy or the Nix config.
 
+Two proxy-trust requirements that the app login flow (Nextcloud mobile apps)
+explicitly exercises — both wired in already:
+
+- **caddy trusts the loopback proxy**: tailscale serve connects from
+  `127.0.0.1` and carries the real client's `X-Forwarded-Proto`. Caddy strips
+  untrusted forwarded headers by default, so the global block pins
+  `servers { trusted_proxies static 127.0.0.1/32 }` — without it NC sees
+  plain HTTP and hands mobile-app login flows `http://` poll endpoints
+  (unreachable — the app spins forever at "Grant access").
+- **NC trusts `127.0.0.1` as a proxy** (`trusted_proxies`, set by
+  `just tailscale`) so it *uses* those forwarded values.
+
+If you ever re-run `tailscale serve` against a different local port, re-run
+`just tailscale` afterwards so NC's trusted setup follows along.
+
 ## Uninstall
 
 ```bash
