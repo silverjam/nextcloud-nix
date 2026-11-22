@@ -184,7 +184,7 @@
       # interlocked: only after the migration-complete stamp (final verify)
       zfsDisasterRemove = pkgs.writeShellScriptBin "zfs-disaster-mirror-remove" ''
         set -euo pipefail
-        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="${CONFIRM:-}" "$0" "$@"
+        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
         test -f ${migrationState}/migration-complete \
           || { echo "refusing: migration-complete stamp missing (run zfs-verify-migration first)" >&2; exit 1; }
         [ "''${CONFIRM:-}" = "disaster" ] \
@@ -1072,7 +1072,7 @@
 
         if [ "$(id -u)" -ne 0 ]; then
           echo "nc-restore: needs root, re-running with sudo..."
-          exec sudo CONFIRM="${CONFIRM:-}" FORCE="${FORCE:-}" "$0" "$@"
+          exec sudo CONFIRM="''${CONFIRM:-}" FORCE="''${FORCE:-}" "$0" "$@"
         fi
 
         SNAP="''${1:-latest}"
@@ -1412,7 +1412,7 @@
 
       zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" ''
         set -euo pipefail
-        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="${CONFIRM:-}" "$0" "$@"
+        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
         [ "''${CONFIRM:-}" = "primary" ] \
           || { echo "This DESTROYS ${primaryDisk} (sdc1 NTFS). A verified second copy exists (disaster mirror or sdb1 mirror)." >&2
                echo "Set CONFIRM=primary to proceed." >&2; exit 1; }
@@ -1491,7 +1491,7 @@
 
       zfsCreateBackup = pkgs.writeShellScriptBin "zfs-create-backup" ''
         set -euo pipefail
-        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="${CONFIRM:-}" "$0" "$@"
+        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
         test -f ${migrationState}/phase2-complete \
           || { echo "refusing: phase-2 stamp missing (run zfs-create-primary first)" >&2; exit 1; }
         [ "''${CONFIRM:-}" = "backup" ] \
@@ -1506,12 +1506,16 @@
         echo "backup: creating zpool (DESTROYS ${backupDisk} NTFS mirror copy)"
         zpool create -f -o ashift=12 -O compression=on -O xattr=sa \
           -O acltype=posixacl -O atime=off \
-          -O mountpoint=${replicaMount} backup "${backupDisk}"
+          -O mountpoint=${replicaMount} ${zfsPoolBackup} "${backupDisk}"
         TS="$(date +%Y%m%d%H%M%S)"
         zfs snapshot -r ${zfsPoolPrimary}@seed-$TS
         echo "backup: seeding replica via zfs send/receive"
-        zfs send -R ${zfsPoolPrimary}/nextcloud@seed-$TS | zfs receive -F ${replicaDataset}
-        zfs send -R ${zfsPoolPrimary}/archive@seed-$TS | zfs receive -F ${zfsPoolBackup}/archive
+        # -o mountpoint keeps the replica out of the primary's mountpoints
+        # (sent properties would otherwise aim it at the live datadir/archive)
+        zfs send -R ${zfsPoolPrimary}/nextcloud@seed-$TS \
+          | zfs receive -F -o mountpoint=${replicaMount}/nextcloud-data ${replicaDataset}
+        zfs send -R ${zfsPoolPrimary}/archive@seed-$TS \
+          | zfs receive -F -o mountpoint=${replicaMount}/archive ${zfsPoolBackup}/archive
         FB="$(find ${replicaMount}/nextcloud-data -type f 2>/dev/null | wc -l)"
         FA="$(find ${replicaMount}/archive -type f 2>/dev/null | wc -l)"
         echo "backup: replica files: nextcloud-data=$FB archive=$FA"
@@ -1533,15 +1537,15 @@
         zfs snapshot ${zfsPoolPrimary}/archive@$STAMP
         if [ -n "$PREV_NC" ]; then
           zfs send -I ${zfsPoolPrimary}/nextcloud@$PREV_NC ${zfsPoolPrimary}/nextcloud@$STAMP \
-            | zfs receive -F ${replicaDataset}
+            | zfs receive -F -x mountpoint ${replicaDataset}
         else
-          zfs send -R ${zfsPoolPrimary}/nextcloud@$STAMP | zfs receive -F ${replicaDataset}
+          zfs send -R ${zfsPoolPrimary}/nextcloud@$STAMP | zfs receive -F -x mountpoint ${replicaDataset}
         fi
         if [ -n "$PREV_AR" ]; then
           zfs send -I ${zfsPoolPrimary}/archive@$PREV_AR ${zfsPoolPrimary}/archive@$STAMP \
-            | zfs receive -F ${zfsPoolBackup}/archive
+            | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
         else
-          zfs send -R ${zfsPoolPrimary}/archive@$STAMP | zfs receive -F ${zfsPoolBackup}/archive
+          zfs send -R ${zfsPoolPrimary}/archive@$STAMP | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
         fi
         date -u +"%Y-%m-%dT%H:%M:%SZ snap=$STAMP" > ${primaryMount}.last-replication
         KEEP=$(( ${zfsKeepSnapshots} ))
