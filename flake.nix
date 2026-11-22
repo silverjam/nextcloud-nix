@@ -315,7 +315,9 @@
           echo "archive: group-writable pass done"
         fi
         echo "archive: scanning $TDIR into the filecache"
-        OCC files:scan ${archiveOwner}
+        # targeted scan: the full-user scan stops at the bind-mountpoint,
+        # while --path walks straight through
+        OCC files:scan --path="${archiveOwner}/files/$NAME"
 
         # member shares via the OCS API as the owner (password from the 0600 log)
         # NC 34 silently drops type-3 group-share recipients (share_with lands
