@@ -29,6 +29,15 @@ zfs-install:
 zfs-rehearse:
     nix run .#zfs-rehearse
 
+# connect the two NTFS volumes READ-ONLY at /mnt/primary + /mnt/backup
+# (migration-only mounts; nothing in the migration writes to them)
+drive-mount:
+    nix run .#drives-mount
+drive-umount:
+    nix run .#drives-umount
+drive-check:
+    nix run .#drives-check
+
 # phase 0.5: full local disaster mirror of sdc1 onto the root disk
 zfs-disaster-mirror-create:
     nix run .#zfs-disaster-mirror-create

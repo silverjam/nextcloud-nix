@@ -128,7 +128,10 @@
       zfsDisasterCreate = pkgs.writeShellScriptBin "zfs-disaster-mirror-create" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
-        SRC="${ntfsSrcMount}"
+        SRC="${primaryMount}"
+        [ -d "$SRC" ] || { echo "$SRC not present — run just drive-mount first" >&2; exit 1; }
+        findmnt -no SOURCE "$SRC" >/dev/null 2>&1 \
+          || { echo "$SRC not mounted — run just drive-mount first" >&2; exit 1; }
         SRCDEV="$(findmnt -no SOURCE "$SRC" 2>/dev/null)" \
           || { echo "$SRC is not mounted" >&2; exit 1; }
         PARENT="$(lsblk -no PKNAME "$SRCDEV" | tail -1)"; PARENT="/dev/$PARENT"
@@ -191,9 +194,65 @@
       zfsKeepSnapshots = "48"; # replication snapshots kept per dataset
       migrationState = "${backupRoot}/migration-state"; # interlock stamps
       disasterMirror = "/var/backups/disaster-mirror-sdc1"; # root-disk full copy
-      ntfsSrcMount = "/mnt"; # sdc1 (label "Data") as auto-mounted by udisks
+      primarySrcMount = "/mnt/primary"; # sdc1 "Data" volume (drives-mount)
+      primaryMount = "/mnt/primary"; # sdc1 NTFS mount (ro during migration)
+      backupMount = "/mnt/backup"; # sdb1 "Data Backup" NTFS mount (ro)
+      primaryUuid = "3E94E6D594E68F29"; # sdc1 NTFS filesystem uuid
+      backupUuid = "6A18D70F18D6D8E1"; # sdb1 NTFS filesystem uuid
+
+      # ------------------------------------------------------------------
+      # drive mount tools (migration-only; NTFS volumes, read-only + force)
+      # ------------------------------------------------------------------
+      drivesCheck = pkgs.writeShellScriptBin "drives-check" ''
+        set -euo pipefail
+        M1="${primaryMount}"; U1="${primaryUuid}"
+        M2="${backupMount}"; U2="${backupUuid}"
+        st() {
+          if findmnt -S "UUID=$1" >/dev/null 2>&1; then
+            echo "  $2: mounted at $(findmnt -no TARGET -S "UUID=$1") (fstype $(findmnt -no FSTYPE -S "UUID=$1"), ro=$(findmnt -no OPTIONS -S "UUID=$1" | grep -co ro))"
+          elif [ -b "/dev/disk/by-uuid/$1" ]; then
+            echo "  $2: connected, NOT mounted (fs $(lsblk -no FSTYPE "/dev/disk/by-uuid/$1"))"
+          else
+            echo "  $2: not connected (by-uuid $1 absent)"
+          fi
+        }
+        echo "== drive status =="
+        st "$U1" "primary ($M1)"
+        st "$U2" "backup  ($M2)"
+      '';
+
+      drivesMount = pkgs.writeShellScriptBin "drives-mount" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        # migration-only mounts: READ-ONLY + force (both NTFS volumes carry
+        # the dirty bit; nothing in the migration phases ever writes to them)
+        for pair in "${primaryUuid}|${primaryMount}" "${backupUuid}|${backupMount}"; do
+          uuid="''${pair%%|*}"; mp="''${pair##*|}"
+          if findmnt "$mp" >/dev/null 2>&1; then
+            echo "drives-mount: $mp already mounted"
+            continue
+          fi
+          dev="/dev/disk/by-uuid/$uuid"
+          if [ ! -b "$dev" ]; then
+            echo "drives-mount: $dev missing — is that drive connected?" >&2
+            exit 1
+          fi
+          install -d -m 0755 "$mp"
+          mount -t ntfs3 -o ro,force "$dev" "$mp"
+          echo "drives-mount: $dev -> $mp (ro,force)"
+        done
+      '';
+
+      drivesUmount = pkgs.writeShellScriptBin "drives-umount" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        for mp in "${primaryMount}" "${backupMount}"; do
+          findmnt "$mp" >/dev/null 2>&1 && umount "$mp" && echo "drives-umount: $mp" || true
+        done
+      '';
 
       # Optional DECLARATIVE user provisioning (creation-side only).
+
       # Users are runtime state like files — removal from this list is a
       # no-op (never delete a user from config), and passwords of existing
       # users are never rotated. New users get a one-shot generated password
@@ -1274,7 +1333,9 @@
         fi
         cleanup() { umount "$M" 2>/dev/null || true; }
         trap cleanup EXIT
-        S="${ntfsSrcMount}"
+        S="${primaryMount}"
+        findmnt -no SOURCE "$S" >/dev/null 2>&1 \
+          || { echo "$S not mounted — run just drive-mount first" >&2; exit 1; }
         findmnt -no SOURCE "$S" 2>/dev/null >/dev/null \
           || { echo "primary NTFS ($S) not mounted — reconnect sdc1 and let it auto-mount at $S" >&2; exit 1; }
         echo "zfs-mirror-ntfs: rsync $S -> $M (sdc1 → sdb1, phase 1)"
@@ -1304,23 +1365,20 @@
                echo "Set CONFIRM=primary to proceed." >&2; exit 1; }
         # interlock: a verified second copy of the sdc1 content must exist —
         # EITHER the local disaster mirror (root disk) OR the sdb1 NTFS mirror
-        M="/var/backups/ntfs-sdb1-mnt"; mkdir -p "$M"
+        # (mounted read-only on /mnt/backup by `just drive-mount`)
         HAVE_DISASTER=0; ARCHIVE_SRC=""; MOUNTED_BY_US=0
         test -f ${migrationState}/disaster-mirror-verified && HAVE_DISASTER=1
         if [ -d "${disasterMirror}" ] && [ -n "$(find ${disasterMirror} -type f 2>/dev/null | head -1)" ]; then
           ARCHIVE_SRC="${disasterMirror}"
           echo "interlock: local disaster mirror present ($(find ${disasterMirror} -type f | wc -l) files)"
         fi
-        if findmnt -S "${backupDisk}" >/dev/null 2>&1; then
-          SDB=1; MOUNTED_BY_US=1
-        elif [ "$(lsblk -no FSTYPE "${backupDisk}" | head -1)" = "ntfs" ]; then
-          mount -t ntfs3 -o ro "${backupDisk}" "$M" && SDB=1 && MOUNTED_BY_US=1
-        else
-          SDB=0
-        fi
-        if [ "$SDB" = "1" ] && [ -f "$M/phase1-verified.stamp" ]; then
-          ARCHIVE_SRC="$M"
-          echo "interlock: sdb1 NTFS mirror present (phase-1 stamp ok)"
+        SDB=0
+        if findmnt "${backupMount}" >/dev/null 2>&1; then
+          SDB=1
+          if [ -f "${backupMount}/phase1-verified.stamp" ]; then
+            ARCHIVE_SRC="${backupMount}"
+            echo "interlock: sdb1 NTFS mirror present on ${backupMount} (phase-1 stamp ok)"
+          fi
         fi
         if [ -z "$ARCHIVE_SRC" ]; then
           echo "refusing: no verified second copy of the sdc1 content found" >&2
@@ -1364,7 +1422,6 @@
         FS="$(find "$ARCHIVE_SRC" -type f ! -name 'phase1-verified.stamp' | wc -l)"
         FA="$(find /mnt/archive -type f | wc -l)"
         echo "primary: archive files secondcopy=$FS imported=$FA"
-        if [ "$MOUNTED_BY_US" = 1 ]; then umount "$M" 2>/dev/null || true; fi
         systemctl start nextcloud-fpm nextcloud-caddy nextcloud-init.service 2>/dev/null || true
         nix run .#occ -- maintenance:mode --off >/dev/null 2>&1 || true
         nix run .#occ -- status | grep -q 'installed: true' \
@@ -1638,6 +1695,9 @@
         "nc-restore" = ncRestoreJob;
         "nc-data-sync" = ncDataSyncJob;
         "nc-provision" = ncProvisionJob;
+        "drives-mount" = drivesMount;
+        "drives-umount" = drivesUmount;
+        "drives-check" = drivesCheck;
         "zfs-install" = zfsInstall;
         "zfs-rehearse" = zfsRehearse;
         "zfs-disaster-mirror-create" = zfsDisasterCreate;
