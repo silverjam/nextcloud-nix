@@ -285,6 +285,28 @@ incremental `zfs send/receive` into `backup/nextcloud-data` (48 snapshots
 retained), replacing the rsync mirror; `just zfs-check` reports pools,
 datasets, mounts and the last replication time.
 
+### Full-pipeline rehearsal before touching real hardware
+
+`tests/vm-run.sh zfs-drill` runs every recipe above **end-to-end in a QEMU
+VM** against throwaway hardware: two loopfile NTFS "drives" (labels `Data` /
+`Data Backup`), recipes re-pointed via flake-overrides to the loop devices and
+drill pools (`drill-primary`/`drill-backup`), the live Nextcloud datadir
+actually moved onto ZFS and back. It exercises the disaster mirror, interlock
+stamps, CONFIRM gates, replica seeding, incremental replication, the
+migration-complete stamp, and restores the instance afterwards.
+
+- Needs KVM + the ZFS kernel module **inside the guest** (installed by the
+  scenario) — runs host-local only; intentionally **not** in the CI matrix
+  (GitHub runners have neither KVM guarantees nor the ZFS module).
+- The guest kernel owns a separate pool namespace, so drill pools can never
+  collide with the real ones; they are destroyed in teardown regardless.
+- The drill caught (and the recipes now fix): the sandbox-unbound `MODEL`
+  reference, NTFS xattr `-X/-A` round-trip errors in `zfs-mirror-ntfs`, the
+  literal `backup` pool name in `zfs-create-backup`, replica receives
+  inheriting the primary's mountpoints (would have mounted the backup copy
+  over the live datadir), an inverted retention prune, and a wrong `findmnt`
+  column in `zfs-verify-migration`. Run it again before the real migration.
+
 ## Maintenance cookbook
 
 ### Users — can this be done in Nix?
