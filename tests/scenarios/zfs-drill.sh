@@ -113,6 +113,15 @@ NEW_SNAPS="$(zfs list -t snapshot -H -o name 2>/dev/null | awk '/nextcloud@sync-
 [ "$NEW_SNAPS" -gt "$PREV_SNAPS" ] || fail "snapshots not accumulating"
 ok "replication applying + snapshot history keeping"
 
+step "retention: syncs clamp to the keep-48 floor (space-gated prune)"
+for i in $(seq 47); do nix run .#zfs-replicate >/dev/null 2>&1; done
+N="$(zfs list -t snapshot -H -o name drill-primary/nextcloud | awk '/sync-/{n++} END{print n+0}')"
+[ "$N" -eq 48 ] || fail "prune clamp wrong (found $N)"
+zfs list -t snapshot -H -o name drill-primary/nextcloud | tail -1 | grep -aq 'sync-' \
+  || fail "newest sync snapshot missing"
+ok "prune clamped to floor ($N snapshots)"
+
+
 step "final verify-migration + teardown"
 nix run .#zfs-verify-migration
 M="$(Q "SELECT count(*) FROM oc_preferences WHERE userid='admin' AND appid='upgradetest' AND configkey='zfsdrill'")"

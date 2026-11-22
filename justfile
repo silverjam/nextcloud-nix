@@ -69,6 +69,9 @@ zfs-check:
 zfs-verify-migration:
     nix run .#zfs-verify-migration
 
+nc-import-archive:
+    nix run .#nc-import-archive
+
 # show the one-shot passwords generated for provisioned users (optional uid filter)
 provisioned-passwords uid="":
     nix run .#provisioned-passwords -- {{ uid }}

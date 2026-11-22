@@ -187,10 +187,95 @@
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
         test -f ${migrationState}/migration-complete \
           || { echo "refusing: migration-complete stamp missing (run zfs-verify-migration first)" >&2; exit 1; }
+        test -f ${migrationState}/import-complete \
+          || { echo "refusing: import-complete stamp missing (finish nc-import-archive first)" >&2; exit 1; }
         [ "''${CONFIRM:-}" = "disaster" ] \
           || { echo "set CONFIRM=disaster to remove ${disasterMirror}" >&2; exit 1; }
         rm -rf "${disasterMirror}"
         echo "disaster mirror removed — $(df -h / | tail -1 | awk '{print $4}') free on /"
+      '';
+
+      ncImportArchive = pkgs.writeShellScriptBin "nc-import-archive" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        # sudo env_reset strips PATH; re-arm what the tail may need
+        export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+        OCC() { ${phpEnv}/bin/php ${nc}/occ "$@"; }
+
+        # gates: only after a verified migration, with the owner provisioned
+        test -f ${migrationState}/migration-complete \
+          || { echo "refusing: run zfs-verify-migration first" >&2; exit 1; }
+        [ -d "${archiveSource}" ] \
+          || { echo "${archiveSource} missing — archive dataset gone?" >&2; exit 1; }
+        OCC user:info ${archiveOwner} >/dev/null \
+          || { echo "user ${archiveOwner} not provisioned (add to provisionedUsers, deploy)" >&2; exit 1; }
+
+        # share name: oldest file year in the source; stamped once, never renamed
+        STATE="${migrationState}/import-share-name"
+        if [ -s "$STATE" ]; then
+          NAME="$(cat "$STATE")"
+        else
+          OLD="$(find "${archiveSource}" -type f -printf '%T+\n' 2>/dev/null | sort | head -1 | cut -d- -f1)"
+          case "$OLD" in
+            1[89][0-9][0-9]|20[0-9][0-9]) ;;
+            *) OLD="$(date +%Y)" ;;
+          esac
+          NAME="Archive $OLD-$(date +%Y)"
+          printf %s "$NAME" > "$STATE"
+        fi
+        TDIR="${ncDataDir}/${archiveOwner}/files/$NAME"
+        echo "archive: importing ${archiveSource} -> $TDIR"
+
+        # one-time resumable copy; a count stamp makes reruns skip it
+        CNT="${migrationState}/import-file-count"
+        if [ -s "$CNT" ]; then
+          echo "archive: already imported ($(< "$CNT") files) — skipping the copy pass"
+        else
+          install -d -m 0770 -o ${ncUser} -g ${ncUser} "$TDIR"
+          rsync -aH --chown=${ncUser}:${ncUser} --info=progress2 \
+            --exclude '/System Volume Information' --exclude '/$RECYCLE.BIN' \
+            "${archiveSource}/" "$TDIR"/
+          FS="$(find "${archiveSource}" -type f | wc -l)"
+          FD="$(find "$TDIR" -type f | wc -l)"
+          echo "archive: files src=$FS dst=$FD"
+          [ "$FD" -ge "$FS" ] || { echo "count mismatch — rerun to complete" >&2; exit 1; }
+          BAD=0
+          while IFS= read -r f; do
+            rel="''${f#"${archiveSource}"/}"
+            cmp -s "$f" "$TDIR/$rel" || { BAD=$((BAD + 1)); echo "  mismatch: $rel" >&2; }
+          done < <(find "${archiveSource}" -type f | shuf -n 250 --random-source=<(yes))
+          [ "$BAD" = 0 ] || { echo "$BAD spot-check mismatches" >&2; exit 1; }
+          chown -R ${ncUser}:${ncUser} "$TDIR"
+          printf %s "$FD" > "$CNT"
+        fi
+        echo "archive: scanning into the filecache"
+        OCC files:scan ${archiveOwner}
+
+        # group share via the OCS API as the owner (the owner's own password
+        # comes from the 0600 provision-credentials log — machine hex)
+        PW="$(grep -ah "^uid=${archiveOwner} password=" ${ncRoot}/provision-credentials-*.log 2>/dev/null \
+          | sed -E 's/^uid=[^ ]+ password=([^ ]+).*/\1/' | tail -1 || true)"
+        [ -n "$PW" ] \
+          || { echo "no credentials for ${archiveOwner} on file — share by hand or re-provision" >&2; exit 1; }
+        EXIST="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -G \
+          --data-urlencode "path=/$NAME" \
+          "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json" \
+          | grep -aoE '"share_with":"${archiveShareGroup}"' | wc -l || true)"
+        if [ "$EXIST" -ge 1 ]; then
+          echo "archive: ${archiveShareGroup} share already present"
+        else
+          RESP="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' \
+            --data-urlencode "path=/$NAME" \
+            --data-urlencode "shareType=3" \
+            --data-urlencode "shareWith=${archiveShareGroup}" \
+            --data-urlencode "permissions=${archiveSharePerms}" \
+            "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json")"
+          echo "$RESP" | grep -aq '"statuscode":200' \
+            || { echo "share creation failed: $RESP" >&2; exit 1; }
+        fi
+
+        touch ${migrationState}/import-complete
+        echo "archive: import complete — '$NAME' shared with ${archiveShareGroup}"
       '';
 
       zfsProvisionedPasswords = pkgs.writeShellScriptBin "provisioned-passwords" ''
@@ -230,6 +315,14 @@
       zfsKeepSnapshots = "48"; # snapshot floor per dataset (never pruned below)
       primaryPruneMinFree = "161061273600"; # 150 GiB: prune primary history only below this
       replicaPruneMinFree = "107374182400"; # 100 GiB: prune replica history only below this
+      # archive import (plan of record): copy the archive dataset into a
+      # service user's folder and group-share it; completes with import-complete
+      archiveOwner = "archive";
+      archiveShareGroup = "parents";
+      archiveSharePerms = "15"; # read+change+create+delete, no re-share
+      archiveSource = "/mnt/archive";
+      ncWebUrl = "http://127.0.0.1:${webPort}";
+
       migrationState = "${backupRoot}/migration-state"; # interlock stamps
       disasterMirror = "/var/backups/disaster-mirror-sdc1"; # root-disk full copy
       primarySrcMount = "/mnt/primary"; # sdc1 "Data" volume (drives-mount)
@@ -300,6 +393,7 @@
       #   };
       provisionedUsers = { 
         jason = { displayName = "Jason Mobarak"; groups = ["family" "parents"]; };
+        archive = { displayName = "Family Archive"; }; # shared-archive owner (no quota)
         josphine = { displayName = "Josephine Sheng"; groups = ["family" "parents"]; };
         addie = { displayName = "Addie Mobarak"; groups = ["family" "kids"]; };
         thaelia = { displayName = "Thaelia Mobarak"; groups = ["family" "kids"]; };
@@ -1567,7 +1661,8 @@
         REP="$(find ${replicaMount} -type f 2>/dev/null | wc -l)"
         [ "$REP" -ge 1 ] || { echo "replica empty" >&2; exit 1; }
         touch ${migrationState}/migration-complete
-        echo "migration verified — the local disaster mirror may now be removed (zfs-disaster-mirror-remove)"
+        echo "migration verified — the disaster mirror stays as the second copy until the archive
+        # import completes; removal stays manual and gated (CONFIRM=disaster)"
       '';
 
       zfsCheck = pkgs.writeShellScriptBin "zfs-check" ''
@@ -1780,6 +1875,7 @@
         "zfs-create-backup" = zfsCreateBackup;
         "zfs-replicate" = zfsReplicate;
         "zfs-verify-migration" = zfsVerifyMigration;
+        "nc-import-archive" = ncImportArchive;
         "zfs-check" = zfsCheck;
         "provisioned-passwords" = zfsProvisionedPasswords;
         nextcloud = nc;
@@ -1841,6 +1937,7 @@
                 "${zfsCreateBackup}/bin/zfs-create-backup" \
                 "${zfsReplicate}/bin/zfs-replicate" \
                 "${zfsVerifyMigration}/bin/zfs-verify-migration" \
+                "${ncImportArchive}/bin/nc-import-archive" \
                 "${zfsCheck}/bin/zfs-check" \
                 "${ncProvisionJob}/bin/nc-provision" \
                 "${zfsProvisionedPasswords}/bin/provisioned-passwords" \

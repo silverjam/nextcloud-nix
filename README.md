@@ -274,8 +274,9 @@ just zfs-disaster-mirror-create   # 0.5: sdc1 -> root SSD + verification stamp
 just drive-umount                 # 2: recipe refuses while a drive is mounted
 CONFIRM=primary just zfs-create-primary     # 2: DESTROYS sdc1 NTFS
 just zfs-create-backup            # 3: DESTROYS sdb1 NTFS (legacy dropped)
-just zfs-verify-migration         # final: enables disaster-mirror removal
-just zfs-disaster-mirror-remove   # frees ~634GiB on the root disk
+just zfs-verify-migration         # certifies pools, datadir, replica
+just nc-import-archive            # copy archive into NC + group share (stamps import-complete)
+just zfs-disaster-mirror-remove   # LAST: needs import-complete + CONFIRM=disaster — nothing automated
 ```
 
 Interlocks are stamps under `/var/backups/nextcloud/migration-state/` —
@@ -307,6 +308,25 @@ migration-complete stamp, and restores the instance afterwards.
   the backup copy over the live datadir), an inverted retention prune, and a
   wrong `findmnt` column in `zfs-verify-migration`. Run it again before the
   real migration.
+
+### Archive import (plan of record)
+
+After the migration is verified, `just nc-import-archive` copies the archive
+dataset into the folder of a service user `archive` (declared in
+`provisionedUsers`, no quota), names the folder from the oldest file on disk
+(`Archive <year>-<year>` — the name is stamped and never renamed on reruns),
+scans it into the filecache, and group-shares it with `parents` as
+read+change+create+delete (15) via the owner's OCS credentials. The recipe is
+resumable (count stamp + 250-file spot check) and stamps `import-complete`
+when done. **`zfs-disaster-mirror-remove` requires that stamp plus a typed
+`CONFIRM=disaster` — nothing automated ever invokes it**, and the disaster
+mirror intentionally stays on the root SSD as the second copy until the import
+is verified.
+
+Retention is space-driven end to end: NC trash and file versions never
+auto-expire (`*_retention_obligation = disabled`), and snapshot history on
+both pools is pruned only below a free-space floor (150 GiB primary, 100 GiB
+replica), never below the newest 48 sync snapshots.
 
 ## Maintenance cookbook
 
