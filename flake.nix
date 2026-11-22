@@ -1365,88 +1365,40 @@
       # ------------------------------------------------------------------
       # ZFS pools + replication (phase interlocks enforced via stamps)
       # ------------------------------------------------------------------
-      zfsMirrorNtfs = pkgs.writeShellScriptBin "zfs-mirror-ntfs" ''
-        set -euo pipefail
-        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
-        # interlock: the local disaster mirror must be verified first
-        test -f ${migrationState}/disaster-mirror-verified \
-          || { echo "refusing: run zfs-disaster-mirror-create first" >&2; exit 1; }
-        BDEV="${backupDisk}"
-        test -b "$BDEV" || { echo "$BDEV missing — reconnect sdb1 (and let it auto-mount or mount ntfs3)" >&2; exit 1; }
-        # reuse an existing mount of the backup NTFS (drive-mount); mount at a
-        # scratch point otherwise and unmount when done
-        if findmnt -S "$BDEV" >/dev/null 2>&1; then
-          M="$(findmnt -no TARGET -S "$BDEV")"; MOUNTED_BY_US=0
-        else
-          M="/var/backups/ntfs-sdb1-mnt"; mkdir -p "$M"; MOUNTED_BY_US=1
-          mount -t ntfs3 "$BDEV" "$M"
-        fi
-        MOUNTED_BY_US=0
-        cleanup() { [ "$MOUNTED_BY_US" = 1 ] && umount "$M" 2>/dev/null || true; }
-        trap cleanup EXIT
-        S="${primaryMount}"
-        findmnt -no SOURCE "$S" >/dev/null 2>&1 \
-          || { echo "$S not mounted — run just drive-mount first" >&2; exit 1; }
-        findmnt -no SOURCE "$S" 2>/dev/null >/dev/null \
-          || { echo "primary NTFS ($S) not mounted — reconnect sdc1 and let it auto-mount at $S" >&2; exit 1; }
-        echo "zfs-mirror-ntfs: rsync $S -> $M (sdc1 → sdb1, phase 1)"
-        # -xX dropped: NTFS-internal xattrs ($LXUID/$LXMOD/…) can't persist
-        # across the ntfs3/ext4 boundary or onto plain NTFS re-mounts
-        rsync -aH --numeric-ids --info=progress2 \
-          --exclude='/$RECYCLE.BIN' --exclude='/System Volume Information' \
-          "$S"/ "$M"/
-        FS="$(find "$S" -type f ! -path '*RECYCLE*' ! -path '*System Volume*' | wc -l)"
-        FD="$(find "$M" -type f | wc -l)"
-        echo "zfs-mirror-ntfs: files src=$FS dst=$FD"
-        [ "$FD" -ge "$FS" ] || { echo "count mismatch — rerun to complete" >&2; exit 1; }
-        BAD=0
-        while IFS= read -r f; do
-          rel="''${f#"$S"/}"
-          cmp -s "$f" "$M/$rel" || { BAD=$((BAD+1)); echo "  mismatch: $rel" >&2; }
-        done < <(find "$S" -type f ! -path '*RECYCLE*' ! -path '*System Volume*' | shuf -n 250 --random-source=<(yes))
-        [ "$BAD" = 0 ] || { echo "$BAD spot-check mismatches" >&2; exit 1; }
-        printf 'verified %s files=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$FD" \
-          > "$M/phase1-verified.stamp"
-        echo "zfs-mirror-ntfs: verified — phase-1 interlock stamp written into the sdb1 mirror"
-      '';
 
       zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
         [ "''${CONFIRM:-}" = "primary" ] \
-          || { echo "This DESTROYS ${primaryDisk} (sdc1 NTFS). A verified second copy exists (disaster mirror or sdb1 mirror)." >&2
+          || { echo "This DESTROYS ${primaryDisk} (sdc1 NTFS). The verified second copy is the disaster mirror." >&2
                echo "Set CONFIRM=primary to proceed." >&2; exit 1; }
-        # interlock: a verified second copy of the sdc1 content must exist —
-        # EITHER the local disaster mirror (root disk) OR the sdb1 NTFS mirror
-        # (mounted read-only on /mnt/backup by `just drive-mount`)
-        HAVE_DISASTER=0; ARCHIVE_SRC=""; MOUNTED_BY_US=0
-        test -f ${migrationState}/disaster-mirror-verified && HAVE_DISASTER=1
+        # interlock: the verified disaster mirror (root disk) is the one
+        # second copy of the sdc1 content — the NTFS phase-1 mirror was
+        # dropped from the plan (legacy sdb1 content is Phase-3-dropped)
+        HAVE_DISASTER=0; ARCHIVE_SRC=""
+        [ -f ${migrationState}/disaster-mirror-verified ] && HAVE_DISASTER=1 || true
         if [ -d "${disasterMirror}" ] && [ -n "$(find ${disasterMirror} -type f 2>/dev/null | head -1)" ]; then
           ARCHIVE_SRC="${disasterMirror}"
           echo "interlock: local disaster mirror present ($(find ${disasterMirror} -type f | wc -l) files)"
         fi
-        SDB=0
-        if findmnt "${backupMount}" >/dev/null 2>&1; then
-          SDB=1
-          if [ -f "${backupMount}/phase1-verified.stamp" ]; then
-            ARCHIVE_SRC="${backupMount}"
-            echo "interlock: sdb1 NTFS mirror present on ${backupMount} (phase-1 stamp ok)"
-          fi
-        fi
-        if [ -z "$ARCHIVE_SRC" ]; then
+        if [ "$HAVE_DISASTER" = 0 ] || [ -z "$ARCHIVE_SRC" ]; then
           echo "refusing: no verified second copy of the sdc1 content found" >&2
-          echo "(need a verified ${disasterMirror} or a phase-1-verified sdb1 mirror)" >&2
+          echo "(need the verified ${disasterMirror})" >&2
           exit 1
         fi
         # device triple-check
         test -b "${primaryDisk}" || { echo "no such device: ${primaryDisk} — reconnect sdc1" >&2; exit 1; }
+        # nix bakes model/minsize at eval time; sandbox runs skip identity checks
         # shellcheck disable=SC2157
         if [ -n "${primaryDiskModel}" ]; then
-          MODEL="$(lsblk -no MODEL "${primaryDisk}")"
-          case "$MODEL" in *"${primaryDiskModel}"*) ;; *) echo "refusing: wrong drive model $MODEL" >&2; exit 1;; esac
-          SZ="$(lsblk -b -no SIZE "${primaryDisk}")"
+          # partition nodes carry no MODEL — read identity off the parent
+          # disk (pattern proven on the real drive by the disaster recipe)
+          PARENT="$(lsblk -no PKNAME "${primaryDisk}" | tail -1)"; PARENT="/dev/$PARENT"
+          MODEL="$(lsblk -no MODEL "$PARENT")"
+          case "$MODEL" in *"${primaryDiskModel}"*) ;; *) echo "refusing: wrong drive for ${primaryDisk} (model '$MODEL', expected ${primaryDiskModel})" >&2; exit 1;; esac
+          SZ="$(lsblk -b -no SIZE "$PARENT")"
           if [ -n "${primaryDiskMinSize}" ]; then
-            [ "$SZ" -ge "${primaryDiskMinSize}" ] || { echo "size mismatch ($SZ)" >&2; exit 1; }
+            [ "$SZ" -ge "${primaryDiskMinSize}" ] || { echo "size mismatch ($SZ on $PARENT)" >&2; exit 1; }
           fi
         fi
         findmnt "${primaryDisk}" >/dev/null 2>&1 \
@@ -1475,9 +1427,8 @@
         chown -R nextcloud:nextcloud /var/lib/nextcloud/data
         echo "primary: importing personal content from $ARCHIVE_SRC -> /mnt/archive"
         rsync -aH --numeric-ids --info=progress2 \
-          --exclude='phase1-verified.stamp' \
           "$ARCHIVE_SRC"/ /mnt/archive/
-        FS="$(find "$ARCHIVE_SRC" -type f ! -name 'phase1-verified.stamp' | wc -l)"
+        FS="$(find "$ARCHIVE_SRC" -type f | wc -l)"
         FA="$(find /mnt/archive -type f | wc -l)"
         echo "primary: archive files secondcopy=$FS imported=$FA"
         systemctl start nextcloud-fpm nextcloud-caddy nextcloud-init.service 2>/dev/null || true
@@ -1788,7 +1739,6 @@
         "zfs-disaster-mirror-create" = zfsDisasterCreate;
         "zfs-disaster-mirror-check" = zfsDisasterCheck;
         "zfs-disaster-mirror-remove" = zfsDisasterRemove;
-        "zfs-mirror-ntfs" = zfsMirrorNtfs;
         "zfs-create-primary" = zfsCreatePrimary;
         "zfs-create-backup" = zfsCreateBackup;
         "zfs-replicate" = zfsReplicate;
@@ -1850,7 +1800,6 @@
                 "${zfsDisasterCreate}/bin/zfs-disaster-mirror-create" \
                 "${zfsDisasterCheck}/bin/zfs-disaster-mirror-check" \
                 "${zfsDisasterRemove}/bin/zfs-disaster-mirror-remove" \
-                "${zfsMirrorNtfs}/bin/zfs-mirror-ntfs" \
                 "${zfsCreatePrimary}/bin/zfs-create-primary" \
                 "${zfsCreateBackup}/bin/zfs-create-backup" \
                 "${zfsReplicate}/bin/zfs-replicate" \

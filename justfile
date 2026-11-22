@@ -46,10 +46,6 @@ zfs-disaster-mirror-check:
 zfs-disaster-mirror-remove:
     nix run .#zfs-disaster-mirror-remove
 
-# phase 1: mirror sdc1 -> sdb1 (NTFS→NTFS rsync + verification)
-zfs-mirror-ntfs:
-    nix run .#zfs-mirror-ntfs
-
 # phase 2/3 (DESTRUCTIVE — both require a typed CONFIRM)
 zfs-create-primary:
     nix run .#zfs-create-primary

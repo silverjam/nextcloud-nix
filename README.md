@@ -301,11 +301,12 @@ migration-complete stamp, and restores the instance afterwards.
 - The guest kernel owns a separate pool namespace, so drill pools can never
   collide with the real ones; they are destroyed in teardown regardless.
 - The drill caught (and the recipes now fix): the sandbox-unbound `MODEL`
-  reference, NTFS xattr `-X/-A` round-trip errors in `zfs-mirror-ntfs`, the
-  literal `backup` pool name in `zfs-create-backup`, replica receives
-  inheriting the primary's mountpoints (would have mounted the backup copy
-  over the live datadir), an inverted retention prune, and a wrong `findmnt`
-  column in `zfs-verify-migration`. Run it again before the real migration.
+  reference and the partition-node `lsblk` MODEL read, NTFS xattr `-X/-A`
+  round-trip errors, the literal `backup` pool name in `zfs-create-backup`,
+  replica receives inheriting the primary's mountpoints (would have mounted
+  the backup copy over the live datadir), an inverted retention prune, and a
+  wrong `findmnt` column in `zfs-verify-migration`. Run it again before the
+  real migration.
 
 ## Maintenance cookbook
 

@@ -76,11 +76,6 @@ test -f /var/backups/disaster-mirror-sdc1/personal-legacy.txt \
   || fail "disaster mirror missing planted file"
 ok "disaster mirror verified"
 
-step "phase 1: ntfs mirror to drive-b"
-nix run .#zfs-mirror-ntfs
-test -f /mnt/backup/phase1-verified.stamp || fail "phase-1 stamp missing"
-ok "ntfs mirror + phase-1 stamp"
-
 step "phase 2: primary zfs pool; NC datadir moves onto zfs"
 nix run .#occ -- maintenance:mode --on >/dev/null
 umount /mnt/primary /mnt/backup 2>/dev/null || true
