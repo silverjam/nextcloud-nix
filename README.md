@@ -249,6 +249,42 @@ file deleted on the new instance (e.g. during `occ upgrade` housekeeping)
 lands in `<target>/.trash/<date>` for 30 days — the mirror can never
 amplify an upgrade mistake beyond that window.
 
+## Storage: migrating to ZFS
+
+The two USB data disks migrate from NTFS to ZFS: sdc1 (label `Data`, 681G) becomes
+the pool **`primary`** — the Nextcloud datadir mounts directly on its
+`primary/nextcloud` dataset at the existing `/var/lib/nextcloud/data` path (zero
+config.php changes); sdb1 (label `Data Backup`) becomes pool **`backup`** — the
+replication target seeded via `zfs send/receive`. No fstab entries anywhere:
+zfs-import + zfs-mount services handle both. 370G of pre-existing legacy
+`Data Backup` content on sdb1 is deliberately **dropped** with the reformat
+(decision 2026-11-21).
+
+Safety design: Phase 0.5 (`zfs-disaster-mirror-create`) copies the entire
+sdc1 content to the root SSD (`/var/backups/disaster-mirror-sdc1`, ~631GiB,
+verified by counts + 250 spot-checksums) — that's the single surviving copy
+during the Phase 2 rebuild window (accepted risk: machine-only during those
+hours). The legacy sdb1 content lives until Phase 3 wipes it.
+
+```bash
+just zfs-install                  # 0: zfsutils + module + 8G ARC cap
+just zfs-rehearse                 # 0: lifecycle rehearsal on throwaway loop pools
+just drive-mount                  # 0.5 prerequisite: mounts NTFS volumes ro
+just zfs-disaster-mirror-create   # 0.5: sdc1 -> root SSD + verification stamp
+just drive-umount                 # 2: recipe refuses while a drive is mounted
+CONFIRM=primary just zfs-create-primary     # 2: DESTROYS sdc1 NTFS
+just zfs-create-backup            # 3: DESTROYS sdb1 NTFS (legacy dropped)
+just zfs-verify-migration         # final: enables disaster-mirror removal
+just zfs-disaster-mirror-remove   # frees ~634GiB on the root disk
+```
+
+Interlocks are stamps under `/var/backups/nextcloud/migration-state/` —
+each phase refuses without the previous stamp, and both destructive recipes
+demand a typed `CONFIRM`. After Phase 2, `just sync-data` becomes snapshot +
+incremental `zfs send/receive` into `backup/nextcloud-data` (48 snapshots
+retained), replacing the rsync mirror; `just zfs-check` reports pools,
+datasets, mounts and the last replication time.
+
 ## Maintenance cookbook
 
 ### Users — can this be done in Nix?
