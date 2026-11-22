@@ -1396,7 +1396,7 @@
         echo "zfs-mirror-ntfs: verified — phase-1 interlock stamp written into the sdb1 mirror"
       '';
 
-      zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" '''
+      zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
         [ "''${CONFIRM:-}" = "primary" ] \
@@ -1816,7 +1816,23 @@
                 "${ncDataSyncJob}/bin/nc-data-sync" \
                 ${dbInit} \
                 ${dbReady} \
-                ${initScript}
+                ${initScript} \
+                "${zfsInstall}/bin/zfs-install" \
+                "${zfsRehearse}/bin/zfs-rehearse" \
+                "${zfsDisasterCreate}/bin/zfs-disaster-mirror-create" \
+                "${zfsDisasterCheck}/bin/zfs-disaster-mirror-check" \
+                "${zfsDisasterRemove}/bin/zfs-disaster-mirror-remove" \
+                "${zfsMirrorNtfs}/bin/zfs-mirror-ntfs" \
+                "${zfsCreatePrimary}/bin/zfs-create-primary" \
+                "${zfsCreateBackup}/bin/zfs-create-backup" \
+                "${zfsReplicate}/bin/zfs-replicate" \
+                "${zfsVerifyMigration}/bin/zfs-verify-migration" \
+                "${zfsCheck}/bin/zfs-check" \
+                "${ncProvisionJob}/bin/nc-provision" \
+                "${zfsProvisionedPasswords}/bin/provisioned-passwords" \
+                "${drivesMount}/bin/drives-mount" \
+                "${drivesUmount}/bin/drives-umount" \
+                "${drivesCheck}/bin/drives-check"
               touch $out
             '';
         # the generated PHP config-writer must parse
