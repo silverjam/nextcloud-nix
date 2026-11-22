@@ -155,9 +155,12 @@
         while IFS= read -r f; do
           rel="''${f#"$SRC"/}"
           N=$((N+1))
-          cmp -s "$f" "${disasterMirror}/$rel" || { bad=$((bad+1)); echo "  mismatch: $rel" >&2; }
+          cmp -s "$f" "${disasterMirror}/$rel" || {
+            BAD=$((BAD + 1))
+            echo "  mismatch: $rel" >&2
+          }
         done < <(find "$SRC" -type f ! -path '*RECYCLE*' ! -path '*System Volume*' | shuf -n 250 --random-source=<(yes))
-        [ "$bad" = 0 ] || { echo "$bad spot-check mismatches" >&2; exit 1; }
+        [ "$BAD" = 0 ] || { echo "$BAD spot-check mismatches" >&2; exit 1; }
         test "$N" -ge 250 || true
         mkdir -p ${migrationState}
         touch ${migrationState}/disaster-mirror-verified
