@@ -141,9 +141,11 @@
         [ "$LABEL" = "Data" ] || { echo "refusing: label is '$LABEL', expected 'Data'" >&2; exit 1; }
         echo "disaster-mirror: rsync $SRC ($SRCDEV, $MODEL) -> ${disasterMirror}"
         install -d -m 0755 "${disasterMirror}"
-        rsync -aHAX --numeric-ids --info=progress2 \
+        # -xX dropped: NTFS$CI.* xattrs cannot round-trip to ext4 (error 95 per
+#          # file); the data + times + hardlinks are what a disaster copy needs
+          rsync -aH --numeric-ids --info=progress2 \
           --exclude='/$RECYCLE.BIN' --exclude='/System Volume Information' \
-          "$SRC"/ "${disasterMirror}"/
+          "$SRC"/ "${disasterMirror}/"
         FS="$(find "$SRC" -type f ! -path '*RECYCLE*' ! -path '*System Volume*' | wc -l)"
         FD="$(find "${disasterMirror}" -type f | wc -l)"
         echo "disaster-mirror: files src=$FS dst=$FD"
