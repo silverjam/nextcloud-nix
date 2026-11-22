@@ -19,6 +19,8 @@ modprobe zfs 2>/dev/null || {
 zfs version >/dev/null
 ok "zfs $(zfs version | head -1) in guest kernel"
 
+# clean prior drill artifacts so repeated runs never fill the disk
+rm -rf /var/backups/zfs-drill-* 2>/dev/null || true
 W="/var/backups/zfs-drill-$(date +%s)"
 SAVED_TAR=""
 mkdir -p "$W"

@@ -102,7 +102,7 @@ echo "[harness] creating boot overlay"
 "$QIMG" create -f qcow2 -b "$IMGCACHE" -F qcow2 "$DISK"
 # base cloud images have a 3.5G virtual disk — too small for apt+nix;
 # grow to 12G and let cloud-init's growpart expand the rootfs on first boot
-"$QIMG" resize "$DISK" 12G
+"$QIMG" resize "$DISK" 20G
 
 # --- boot (KVM when available, TCG emulation otherwise)
 ACCEL="accel=tcg"
