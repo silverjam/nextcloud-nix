@@ -315,6 +315,7 @@
           echo "archive: group-writable pass done"
         fi
         echo "archive: scanning $TDIR into the filecache"
+        NAME="${archiveBindMountName}"
         # targeted scan: the full-user scan stops at the bind-mountpoint,
         # while --path walks straight through
         OCC files:scan --path="${archiveOwner}/files/$NAME"
