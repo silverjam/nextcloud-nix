@@ -1589,7 +1589,11 @@
         NEW=0
 
         for raw in "''${SPECS[@]}"; do
-          IFS=$'\t' read -r uid display quota groups <<< "$raw"
+          # split on tabs WITHOUT read(): read treats tab as whitespace and
+          # collapses runs of tabs, losing EMPTY middle fields (quota)
+          mapfile -t F < <(printf '%s\n' "''${raw//''$'\t'/$'\n'}")
+          uid="''${F[0]:-}"; display="''${F[1]:-}"
+          quota="''${F[2]:-}"; groups="''${F[3]:-}"
           # removal wins: a uid listed in deprovisionedUsers is never
           # re-created by the provision loop (they would otherwise oscillate
           # create → delete on every deploy)
