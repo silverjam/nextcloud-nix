@@ -1369,6 +1369,9 @@
       zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
+        # sudo env_reset strips PATH and the nix feature flags the tail needs
+        export PATH="/nix/var/nix/profiles/default/bin:$PATH"
+        export NIX_CONFIG="experimental-features = nix-command flakes"
         [ "''${CONFIRM:-}" = "primary" ] \
           || { echo "This DESTROYS ${primaryDisk} (sdc1 NTFS). The verified second copy is the disaster mirror." >&2
                echo "Set CONFIRM=primary to proceed." >&2; exit 1; }
