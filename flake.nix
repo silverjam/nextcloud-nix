@@ -317,29 +317,41 @@
         echo "archive: scanning $TDIR into the filecache"
         OCC files:scan ${archiveOwner}
 
-        # share via the OCS API as the owner (password from the 0600 log)
+        # member shares via the OCS API as the owner (password from the 0600 log)
+        # NC 34 silently drops type-3 group-share recipients (share_with lands
+        # empty + default perms) — share each group member directly instead
         PW="$(grep -ah "^uid=${archiveOwner} password=" ${ncRoot}/provision-credentials-*.log 2>/dev/null \
           | sed -E 's/^uid=[^ ]+ password=([^ ]+).*/\1/' | tail -1 || true)"
         [ -n "$PW" ] \
           || { echo "no credentials for ${archiveOwner} on file — share by hand or re-provision" >&2; exit 1; }
         NAME="${archiveBindMountName}"
-        EXIST="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -G \
+        MEMBERS="$(OCC group:list --output=json 2>/dev/null | python3 -c "import json,sys
+print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
+        [ -n "$MEMBERS" ] \
+          || { echo "group ${archiveShareGroup} empty or missing — nothing to share with" >&2; exit 1; }
+        HELD="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -G \
           --data-urlencode "path=/$NAME" \
           "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json" \
-          | grep -aoE '"share_with":"${archiveShareGroup}"' | wc -l || true)"
-        if [ "$EXIST" -ge 1 ]; then
-          echo "archive: ${archiveShareGroup} share already present"
-        else
+          | grep -aoE '"share_with":"[a-z0-9_.@-]+"' || true)"
+        CREATED=0
+        for m in $MEMBERS; do
+          [ "$m" = "${archiveOwner}" ] && continue
+          case "$HELD" in
+            *"share_with\":\"$m\""*) continue ;;
+          esac
           RESP="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' \
             --data-urlencode "path=/$NAME" \
-            --data-urlencode "shareType=3" \
-            --data-urlencode "shareWith=${archiveShareGroup}" \
+            --data-urlencode "shareType=0" \
+            --data-urlencode "shareWith=$m" \
             --data-urlencode "permissions=${archiveSharePerms}" \
             "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json")"
           echo "$RESP" | grep -aq '"statuscode":200' \
-            || { echo "share creation failed: $RESP" >&2; exit 1; }
-        fi
-        echo "archive: '$NAME' shared with ${archiveShareGroup} (interim bind; option B replaces it)"
+            || { echo "share with member $m failed: $RESP" >&2; exit 1; }
+          CREATED=$((CREATED + 1))
+          echo "archive: shared '$NAME' with member $m (${archiveSharePerms})"
+        done
+        [ "$CREATED" = 0 ] && echo "archive: member shares already present for all of ${archiveShareGroup}"
+        echo "archive: '$NAME' shared with ${archiveShareGroup} members (interim bind; option B replaces it)"
       '';
 
       zfsProvisionedPasswords = pkgs.writeShellScriptBin "provisioned-passwords" ''

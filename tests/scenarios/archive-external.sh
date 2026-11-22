@@ -47,8 +47,8 @@ step "share: member visibility + delete-through-UI"
 PGBIN="$(nix build .#postgresql --no-link --print-out-paths | tail -1)"
 Q() { runuser -u nextcloud -- "$PGBIN/bin/psql" -h /run/nextcloud-db -U nextcloud -d nextcloud -tAc "$1"; }
 expect_equal 1 \
-  "$(Q "SELECT count(*) FROM oc_share WHERE share_type=3 AND share_with='parents' AND permissions=15")" \
-  "group share exists with permissions 15"
+  "$(Q "SELECT count(*) FROM oc_share WHERE share_type=0 AND share_with='jason' AND permissions=15")" \
+  "member share for jason exists with permissions 15"
 curl -sS -u "jason:$PW" -X PROPFIND -H 'Depth: 1' "$BASE_URL/remote.php/dav/files/jason/" \
   | grep -aq 'Archive' || fail "jason does not see the bound archive folder"
 CODE="$(curl -sS -o /dev/null -w '%{http_code}' -u "jason:$PW" \
@@ -64,5 +64,5 @@ ok "delete-through-UI lands in trash, dataset copy preserved"
 
 step "share: rerun is idempotent"
 OUT="$(nix run .#nc-archive-share 2>&1)"
-echo "$OUT" | grep -aq 'share already present' || fail "rerun did not detect the share"
+echo "$OUT" | grep -aq 'member shares already present' || fail "rerun did not detect the shares"
 ok "rerun idempotent"

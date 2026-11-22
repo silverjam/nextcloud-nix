@@ -311,12 +311,20 @@ migration-complete stamp, and restores the instance afterwards.
 
 ### Archive import (plan of record)
 
-After the migration is verified, `just nc-import-archive` copies the archive
-dataset into the folder of a service user `archive` (declared in
-`provisionedUsers`, no quota), names the folder from the oldest file on disk
-(`Archive <year>-<year>` — the name is stamped and never renamed on reruns),
-scans it into the filecache, and group-shares it with `parents` as
-read+change+create+delete (15) via the owner's OCS credentials. The recipe is
+After the migration is verified, the archive is served to Nextcloud in two
+steps. **Interim (zero copy): `just nc-archive-share`** — a systemd mount unit
+binds the archive dataset into the datadir (after provisioning run the
+account, per unit ordering), the recipe scans it and shares the folder with
+each member of `parents` (read+change+create+delete, 15) via the owner's OCS
+credentials. Per-member user-shares are deliberate: NC 34 silently drops
+type-3 group-share recipients, while user-shares carry every parameter.
+Delete-through-UI moves files into trash (retention disabled — nothing
+auto-expires) with the dataset copy untouched. **Long term (option B):
+`just nc-import-archive`** copies the archive dataset into the folder of
+service user `archive` as `Archive <year>-<year>` (name stamped once from the
+oldest file on disk), scans it and shares the same way; resumable (count
+stamp + 250-file spot check), stamps `import-complete` when done — after
+which the interim bind and its share can be retired. The recipe is
 resumable (count stamp + 250-file spot check) and stamps `import-complete`
 when done. **`zfs-disaster-mirror-remove` requires that stamp plus a typed
 `CONFIRM=disaster` — nothing automated ever invokes it**, and the disaster
