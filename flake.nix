@@ -390,8 +390,12 @@
         ConditionPathIsDirectory=${archiveSource}
         # the bind lands INSIDE the archive user's home — the account must
         # exist first (its creation refuses when the home already holds files)
-        Requires=nextcloud-provision.service
-        After=nextcloud-provision.service
+        # Requires pulls init AND provision into the transaction (After only
+        # orders — without the pull, provision spawned before init created
+        # ncRoot and died at namespace setup); the account must exist before
+        # its home holds files
+        Requires=nextcloud-init.service nextcloud-provision.service
+        After=nextcloud-init.service nextcloud-provision.service
         [Mount]
         What=${archiveSource}
         Where=${archiveBindWhere}
