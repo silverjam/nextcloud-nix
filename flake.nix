@@ -178,7 +178,7 @@
       # interlocked: only after the migration-complete stamp (final verify)
       zfsDisasterRemove = pkgs.writeShellScriptBin "zfs-disaster-mirror-remove" ''
         set -euo pipefail
-        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="${CONFIRM:-}" "$0" "$@"
         test -f ${migrationState}/migration-complete \
           || { echo "refusing: migration-complete stamp missing (run zfs-verify-migration first)" >&2; exit 1; }
         [ "''${CONFIRM:-}" = "disaster" ] \
@@ -1064,7 +1064,7 @@
 
         if [ "$(id -u)" -ne 0 ]; then
           echo "nc-restore: needs root, re-running with sudo..."
-          exec sudo "$0" "$@"
+          exec sudo CONFIRM="${CONFIRM:-}" FORCE="${FORCE:-}" "$0" "$@"
         fi
 
         SNAP="''${1:-latest}"
@@ -1398,7 +1398,7 @@
 
       zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" ''
         set -euo pipefail
-        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="${CONFIRM:-}" "$0" "$@"
         [ "''${CONFIRM:-}" = "primary" ] \
           || { echo "This DESTROYS ${primaryDisk} (sdc1 NTFS). A verified second copy exists (disaster mirror or sdb1 mirror)." >&2
                echo "Set CONFIRM=primary to proceed." >&2; exit 1; }
@@ -1472,7 +1472,7 @@
 
       zfsCreateBackup = pkgs.writeShellScriptBin "zfs-create-backup" ''
         set -euo pipefail
-        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="${CONFIRM:-}" "$0" "$@"
         test -f ${migrationState}/phase2-complete \
           || { echo "refusing: phase-2 stamp missing (run zfs-create-primary first)" >&2; exit 1; }
         [ "''${CONFIRM:-}" = "backup" ] \
