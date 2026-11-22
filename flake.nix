@@ -212,6 +212,8 @@
 
       primaryDisk = "/dev/disk/by-id/ata-ST2000DL001-9VT156_5YD1BHCZ-part1"; # sdc1, USB3
       backupDisk = "/dev/disk/by-id/ata-ST2000DL003-9VT166_6YD055P4-part1"; # sdb1
+      primaryDiskModel = "ST2000DL001";
+      primaryDiskMinSize = "2000000000000";
       zfsPoolPrimary = "primary";
       zfsPoolBackup = "backup";
       ncDataset = "${zfsPoolPrimary}/nextcloud"; # mounts at the nc datadir
@@ -1432,7 +1434,7 @@
         [ "$SZ" -gt 2000000000000 ] || { echo "size mismatch ($SZ)" >&2; exit 1; }
         findmnt "${primaryDisk}" >/dev/null 2>&1 \
           && { echo "refusing: ${primaryDisk} is mounted" >&2; exit 1; }
-        zpool list -H -o name 2>/dev/null | grep -qx primary \
+        zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolPrimary} \
           && { echo "pool 'primary' already exists" >&2; exit 1; }
         # maintenance + pause timers + preserve the current datadir
         nix run .#occ -- maintenance:mode --on >/dev/null 2>&1 || true
@@ -1447,9 +1449,9 @@
         mkdir -p /var/lib/nextcloud/data
         echo "primary: creating zpool (DESTROYS ${primaryDisk} NTFS content)"
         zpool create -f -o ashift=12 -O compression=lz4 -O xattr=sa \
-          -O acltype=posixacl -O atime=off primary "${primaryDisk}"
-        zfs create -o mountpoint=/var/lib/nextcloud/data primary/nextcloud
-        zfs create -o mountpoint=/mnt/archive primary/archive
+          -O acltype=posixacl -O atime=off ${zfsPoolPrimary} "${primaryDisk}"
+        zfs create -o mountpoint=/var/lib/nextcloud/data ${zfsPoolPrimary}/nextcloud
+        zfs create -o mountpoint=/mnt/archive ${zfsPoolPrimary}/archive
         chown -R nextcloud:nextcloud /var/lib/nextcloud/data
         echo "primary: restoring nc datadir from the safety tar"
         tar xzf "$SAVED" -C /var/lib/nextcloud
@@ -1482,17 +1484,17 @@
         if findmnt -S "${backupDisk}" >/dev/null 2>&1; then
           echo "refusing: ${backupDisk} is mounted" >&2; exit 1
         fi
-        zpool list -H -o name 2>/dev/null | grep -qx backup \
+        zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolBackup} \
           && { echo "pool 'backup' already exists" >&2; exit 1; }
         echo "backup: creating zpool (DESTROYS ${backupDisk} NTFS mirror copy)"
         zpool create -f -o ashift=12 -O compression=on -O xattr=sa \
           -O acltype=posixacl -O atime=off \
           -O mountpoint=${replicaMount} backup "${backupDisk}"
         TS="$(date +%Y%m%d%H%M%S)"
-        zfs snapshot -r primary@seed-$TS
+        zfs snapshot -r ${zfsPoolPrimary}@seed-$TS
         echo "backup: seeding replica via zfs send/receive"
-        zfs send -R primary/nextcloud@seed-$TS | zfs receive -F ${replicaDataset}
-        zfs send -R primary/archive@seed-$TS | zfs receive -F backup/archive
+        zfs send -R ${zfsPoolPrimary}/nextcloud@seed-$TS | zfs receive -F ${replicaDataset}
+        zfs send -R ${zfsPoolPrimary}/archive@seed-$TS | zfs receive -F ${zfsPoolBackup}/archive
         FB="$(find ${replicaMount}/nextcloud-data -type f 2>/dev/null | wc -l)"
         FA="$(find ${replicaMount}/archive -type f 2>/dev/null | wc -l)"
         echo "backup: replica files: nextcloud-data=$FB archive=$FA"
@@ -1503,34 +1505,34 @@
       zfsReplicate = pkgs.writeShellScriptBin "zfs-replicate" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
-        zpool list -H -o name 2>/dev/null | grep -qx primary \
+        zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolPrimary} \
           || { echo "primary pool missing" >&2; exit 1; }
-        zpool list -H -o name 2>/dev/null | grep -qx backup \
+        zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolBackup} \
           || { echo "backup pool missing" >&2; exit 1; }
         STAMP="sync-$(date +%Y%m%d%H%M%S)"
-        PREV_NC="$(zfs list -t snapshot -o name -H -s creation primary/nextcloud | tail -1 | cut -d@ -f2 || true)"
-        PREV_AR="$(zfs list -t snapshot -o name -H -s creation primary/archive | tail -1 | cut -d@ -f2 || true)"
-        zfs snapshot primary/nextcloud@$STAMP
-        zfs snapshot primary/archive@$STAMP
+        PREV_NC="$(zfs list -t snapshot -o name -H -s creation ${zfsPoolPrimary}/nextcloud | tail -1 | cut -d@ -f2 || true)"
+        PREV_AR="$(zfs list -t snapshot -o name -H -s creation ${zfsPoolPrimary}/archive | tail -1 | cut -d@ -f2 || true)"
+        zfs snapshot ${zfsPoolPrimary}/nextcloud@$STAMP
+        zfs snapshot ${zfsPoolPrimary}/archive@$STAMP
         if [ -n "$PREV_NC" ]; then
-          zfs send -I primary/nextcloud@$PREV_NC primary/nextcloud@$STAMP \
+          zfs send -I ${zfsPoolPrimary}/nextcloud@$PREV_NC ${zfsPoolPrimary}/nextcloud@$STAMP \
             | zfs receive -F ${replicaDataset}
         else
-          zfs send -R primary/nextcloud@$STAMP | zfs receive -F ${replicaDataset}
+          zfs send -R ${zfsPoolPrimary}/nextcloud@$STAMP | zfs receive -F ${replicaDataset}
         fi
         if [ -n "$PREV_AR" ]; then
-          zfs send -I primary/archive@$PREV_AR primary/archive@$STAMP \
-            | zfs receive -F backup/archive
+          zfs send -I ${zfsPoolPrimary}/archive@$PREV_AR ${zfsPoolPrimary}/archive@$STAMP \
+            | zfs receive -F ${zfsPoolBackup}/archive
         else
-          zfs send -R primary/archive@$STAMP | zfs receive -F backup/archive
+          zfs send -R ${zfsPoolPrimary}/archive@$STAMP | zfs receive -F ${zfsPoolBackup}/archive
         fi
-        date -u +"%Y-%m-%dT%H:%M:%SZ snap=$STAMP" > /primary/.last-replication
+        date -u +"%Y-%m-%dT%H:%M:%SZ snap=$STAMP" > ${primaryMount}.last-replication
         KEEP=$(( ${zfsKeepSnapshots} ))
-        zfs list -t snapshot -o name -H -s creation -r primary 2>/dev/null \
+        zfs list -t snapshot -o name -H -s creation -r ${zfsPoolPrimary} 2>/dev/null \
           | grep -v seed | grep '@' | head -n +$((KEEP + 1)) | cut -d@ -f2 \
           | sort -u | while IFS= read -r s; do
-              zfs destroy "primary/nextcloud@$s" 2>/dev/null || true
-              zfs destroy "primary/archive@$s" 2>/dev/null || true
+              zfs destroy "${zfsPoolPrimary}/nextcloud@$s" 2>/dev/null || true
+              zfs destroy "${zfsPoolPrimary}/archive@$s" 2>/dev/null || true
             done
         echo "replicate: done (snap $STAMP; origin keeps $KEEP snapshots)"
       '';
@@ -1540,9 +1542,9 @@
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
         test -f ${migrationState}/phase3-complete \
           || { echo "refusing: phase-3 stamp missing (run zfs-create-backup first)" >&2; exit 1; }
-        zpool status primary 2>/dev/null | grep -q ONLINE \
+        zpool status ${zfsPoolPrimary} 2>/dev/null | grep -q ONLINE \
           || { echo "primary not ONLINE" >&2; exit 1; }
-        zpool status backup 2>/dev/null | grep -q ONLINE \
+        zpool status ${zfsPoolBackup} 2>/dev/null | grep -q ONLINE \
           || { echo "backup not ONLINE" >&2; exit 1; }
         findmnt -no TARGET /var/lib/nextcloud/data \
           | grep -q primary || { echo "datadir not a zfs mount" >&2; exit 1; }
@@ -1565,7 +1567,7 @@
         echo "== datadir mount =="
         findmnt -no TARGET,SOURCE,FSTYPE /var/lib/nextcloud/data 2>/dev/null || true
         echo "== last replication =="
-        cat /primary/.last-replication 2>/dev/null || echo "(never)"
+        cat ${primaryMount}.last-replication 2>/dev/null || echo "(never)"
         echo "== migration state =="
         ls ${migrationState} 2>/dev/null || true
       '';
