@@ -298,6 +298,12 @@
           || { echo "user ${archiveOwner} not provisioned" >&2; exit 1; }
 
         TDIR="${archiveBindWhere}"
+        # systemd auto-created the mountpoint hierarchy root-owned — the home
+        # tree dirs must be nextcloud-owned or the home-storage check fails
+        # ("files subdirectory missing") and the scan/share treat it read-only
+        install -d -o ${ncUser} -g ${ncUser} -m 0700 "${ncDataDir}/${archiveOwner}"
+        install -d -o ${ncUser} -g ${ncUser} -m 0700 "${ncDataDir}/${archiveOwner}/files"
+        install -d -o ${ncUser} -g ${ncUser} -m 0770 "${ncDataDir}/${archiveOwner}/files/${archiveBindMountName}" 2>/dev/null || true
         # group-writable pass so the NC process can move deletes into trash
         PERM="${migrationState}/archive-perms-done"
         if [ ! -s "$PERM" ]; then
