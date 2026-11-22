@@ -1621,8 +1621,10 @@
           if [ -n "$groups" ]; then
             IFS=';' read -ra GS <<< "$groups"
             for g in "''${GS[@]}"; do
-              OCC group:add "$g" >/dev/null 2>&1 || true
-              OCC group:adduser "$g" "$uid" >/dev/null 2>&1 || true
+              OUT="$(OCC group:add "$g" 2>&1)" \
+                || echo "provision: group:add $g FAILED: $OUT"
+              OUT="$(OCC group:adduser "$g" "$uid" 2>&1)" \
+                || echo "provision: group:adduser $g $uid FAILED: $OUT"
             done
           fi
         done
