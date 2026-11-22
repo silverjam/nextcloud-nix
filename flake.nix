@@ -1394,9 +1394,9 @@
           # partition nodes carry no MODEL — read identity off the parent
           # disk (pattern proven on the real drive by the disaster recipe)
           PARENT="$(lsblk -no PKNAME "${primaryDisk}" | tail -1)"; PARENT="/dev/$PARENT"
-          MODEL="$(lsblk -no MODEL "$PARENT")"
+          MODEL="$(lsblk -d -no MODEL "$PARENT")"
           case "$MODEL" in *"${primaryDiskModel}"*) ;; *) echo "refusing: wrong drive for ${primaryDisk} (model '$MODEL', expected ${primaryDiskModel})" >&2; exit 1;; esac
-          SZ="$(lsblk -b -no SIZE "$PARENT")"
+          SZ="$(lsblk -d -b -no SIZE "$PARENT")"
           if [ -n "${primaryDiskMinSize}" ]; then
             [ "$SZ" -ge "${primaryDiskMinSize}" ] || { echo "size mismatch ($SZ on $PARENT)" >&2; exit 1; }
           fi
