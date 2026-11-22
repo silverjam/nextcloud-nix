@@ -388,6 +388,10 @@
         [Unit]
         Description=Nextcloud archive dataset bind-mounted into the datadir (interim)
         ConditionPathIsDirectory=${archiveSource}
+        # the bind lands INSIDE the archive user's home — the account must
+        # exist first (its creation refuses when the home already holds files)
+        Requires=nextcloud-provision.service
+        After=nextcloud-provision.service
         [Mount]
         What=${archiveSource}
         Where=${archiveBindWhere}
@@ -1043,12 +1047,6 @@
         echo "== backup roots =="
         install -d -o ${ncUser} -g ${ncUser} -m 0700 \
           ${backupRoot} ${resticRepo} ${stashRoot}
-        # the archive bind: pre-create the owner home tree nextcloud-owned so
-        # the mount unit never auto-creates root-owned parents, and the leaf
-        # stays writable for uploads at the share root
-        install -d -o ${ncUser} -g ${ncUser} -m 0700 "${ncDataDir}/${archiveOwner}"
-        install -d -o ${ncUser} -g ${ncUser} -m 0700 "${ncDataDir}/${archiveOwner}/files"
-        install -d -o ${ncUser} -g ${ncUser} -m 0770 "${ncDataDir}/${archiveOwner}/files/${archiveBindMountName}"
         # Nix bakes dataSyncTarget at eval time — shellcheck sees literals
         # where these guard the "disabled" knob (empty string).
         # shellcheck disable=SC2157
