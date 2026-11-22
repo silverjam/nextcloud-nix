@@ -80,9 +80,9 @@ ok "ntfs mirror + phase-1 stamp"
 
 step "phase 2: primary zfs pool; NC datadir moves onto zfs"
 nix run .#occ -- maintenance:mode --on >/dev/null
+CONFIRM=primary nix run .#zfs-create-primary
 SAVED_TAR="$(ls -1 /var/backups/nextcloud/pre-zfs-datadir-*.tar.gz 2>/dev/null | tail -1 || true)"
 [ -n "$SAVED_TAR" ] || fail "no pre-zfs safety tar found"
-CONFIRM=primary nix run .#zfs-create-primary
 findmnt -no FSTYPE /var/lib/nextcloud/data | grep -q zfs || fail "datadir not zfs"
 nix run .#occ -- status | grep -q 'installed: true' || fail "NC not healthy on zfs"
 M="$(Q "SELECT count(*) FROM oc_preferences WHERE userid='admin' AND appid='upgradetest' AND configkey='zfsdrill'")"
