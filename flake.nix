@@ -451,6 +451,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       archiveSharePerms = "15"; # read+change+create+delete, no re-share
       archiveSource = "/mnt/archive";
       ncWebUrl = "http://127.0.0.1:${webPort}";
+      # NC store apps the deploy installs + enables; add an app here and a
+      # deploy brings it in (the store resolves the platform-compatible
+      # version, NC 34 currently -> files_archive 1.3.2)
+      storeApps = [ "music" "files_archive" ];
+      storeAppsJoined = lib.concatStringsSep " " storeApps;
       # interim: the archive dataset binds INTO the datadir (zero copy) and is
       # served as a native shared folder; option B's copy replaces this later
       archiveBindMountName = "Archive (Read only)";
@@ -1177,14 +1182,15 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # cleanup: the brief /etc/nextcloud-bin experiment
         rm -f /etc/nextcloud-bin/ffmpeg /etc/nextcloud-bin/ffprobe 2>/dev/null || true
         rmdir /etc/nextcloud-bin 2>/dev/null || true
-        # the music app installs from the NC app store: platform versioning
-        # and code signatures are the store's job; the version follows the
-        # store's latest-compatible release at install time (upgrades happen
-        # via app:upgrade). Vendoring was dropped: the music project's 3.x
-        # tarballs are store-only (public GitHub releases cap at NC 32)
+        # store apps: the flake's storeApps list declares which apps are
+        # wanted; the NC app store handles platform versioning + signatures
+        # (app:install + app:enable are both idempotent; app versions follow
+        # the store's latest-compatible releases, upgrades via app:upgrade)
         install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
-        nix run .#occ -- app:install music 2>&1 | tail -1 || true
-        nix run .#occ -- app:enable music 2>&1 | tail -1 || true
+        for a in ${storeAppsJoined}; do
+          nix run .#occ -- app:install "$a" 2>&1 | tail -1 || true
+          nix run .#occ -- app:enable "$a" 2>&1 | tail -1 || true
+        done
         systemctl restart nextcloud-fpm.service
 
         if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
