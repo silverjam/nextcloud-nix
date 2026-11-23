@@ -2,9 +2,10 @@
 # NC archive-import drill (docker): plants a small source tree whose oldest
 # file is dated 2007, then runs the REAL nc-import-archive recipe and asserts
 # the whole chain: migration gate order, owner provisioning gate, resumable
-# copy, computed folder name, filecache rows, the parents group share
-# (visibility + delete-through-UI landing in trash), the retention config
-# keys, and that zfs-disaster-mirror-remove stays locked until import-complete
+# copy, computed folder name, filecache rows, the per-member user-shares (NC
+# 34 silently drops type-3 group-share recipients), recipient visibility +
+# delete-through-UI landing in trash, the retention config keys, and that
+# zfs-disaster-mirror-remove stays locked until import-complete
 # AND only runs with CONFIRM=disaster.
 install_and_assert
 
@@ -45,8 +46,8 @@ nix run .#nc-import-archive
 expect_equal 1 \
   "$(test -f '/var/lib/nextcloud/data/archive/files/Archive 2007-2026/2007/oldest.txt' && echo 1)" \
   "folder named from the oldest file (Archive 2007-2026)"
-[ "$(find '/var/lib/nextcloud/data/archive/files/Archive 2007-2026' -type f | wc -l)" -eq 3 ] \
-  || fail "expected 3 imported files"
+[ "$(find '/var/lib/nextcloud/data/archive/files/Archive 2007-2026' -type f | wc -l)" -eq 4 ] \
+  || fail "expected 4 imported files (3 txt + the synthetic mjpeg mov)"
 grep -aF "'trashbin_retention_obligation' => 'disabled'" /var/lib/nextcloud/config/config.php >/dev/null \
   || fail "trashbin retention not disabled in config.php"
 grep -aF "'versions_retention_obligation' => 'disabled'" /var/lib/nextcloud/config/config.php >/dev/null \
@@ -60,17 +61,17 @@ expect_equal 3 \
   "$(Q "SELECT count(*) FROM oc_filecache WHERE name IN ('oldest.txt','newer.txt','top.txt')")" \
   "filecache picked up the imported files"
 
-step "import: group share visible to a member"
+step "import: per-member user-shares visible to a recipient"
 PW="$(grep -ah '^uid=jason password=' /var/lib/nextcloud/provision-credentials-*.log 2>/dev/null \
   | sed -E 's/^[^ ]+ password=([^ ]+).*/\1/' | tail -1)"
 [ -n "$PW" ] || fail "jason credentials not found"
-expect_equal 1 \
-  "$(Q "SELECT count(*) FROM oc_share WHERE share_type=3 AND share_with='parents' AND permissions=15")" \
-  "group share exists with permissions 15"
+expect_equal 2 \
+  "$(Q "SELECT count(*) FROM oc_share WHERE share_type=0 AND permissions=15 AND share_with IN ('jason','josphine')")" \
+  "one type-0 user-share per member (NC 34 drops type-3 group recipients)"
 curl -sS -u "jason:$PW" -X PROPFIND -H 'Depth: 1' "$BASE_URL/remote.php/dav/files/jason/" \
   | grep -aq 'Archive 2007-2026' \
   || fail "jason does not see the shared folder"
-ok "share visible to the parents group"
+ok "member shares visible to the parents members"
 
 step "retention: a member's delete lands in trash and stays"
 CODE="$(curl -sS -o /dev/null -w '%{http_code}' -u "jason:$PW" \
@@ -84,7 +85,7 @@ ok "delete-through-UI kept in trash"
 step "import: rerun is idempotent"
 OUT="$(nix run .#nc-import-archive 2>&1)"
 echo "$OUT" | grep -aq 'already imported' || fail "rerun did not skip the copy pass"
-echo "$OUT" | grep -aq 'share already present' || fail "rerun did not detect the share"
+echo "$OUT" | grep -aq 'already present' || fail "rerun did not detect the shares"
 ok "rerun skips copy + share"
 
 step "transcode: undecodable mjpeg gets an h264 sibling"
@@ -94,7 +95,8 @@ OCC2() { sudo -u nextcloud env HOME=/var/lib/nextcloud NEXTCLOUD_CONFIG_DIR=/var
 nix run .#nc-transcode-unplayable >/dev/null
 CONV="/var/lib/nextcloud/data/archive/files/Archive 2007-2026/videos/legacy-cam.mp4"
 test -f "$CONV" || fail "transcoded sibling mp4 missing"
-C=$(ffprobe -v quiet -show_entries stream=codec_name,codec_type -of csv=p=0 "$CONV" 2>/dev/null | head -1)
+FP="$(dirname "$FF")/ffprobe"
+C=$("$FP" -v quiet -show_entries stream=codec_name,codec_type -of csv=p=0 "$CONV" 2>/dev/null | head -1)
 case "$C" in *"h264,video"*) ;; *) fail "converted file is not h264 (got: $C)";; esac
 [ -f "$SRC/videos/legacy-cam.mov" ] || fail "original mov was removed"
 ok "transcode made an h264 sibling, original preserved"

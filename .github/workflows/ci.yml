@@ -10,9 +10,10 @@
 #   docker-tests : tests/docker-run.sh <scenario> — the REAL deploy against a
 #                  systemd container (privileged; hosted runners allow it).
 #                  Push/PR runs the whole container suite as parallel matrix
-#                  jobs — every scenario except `reboot`, which only the VM
-#                  harness can do. Manual dispatch: toggle "run_docker" and
-#                  pick one scenario (or `all` for the whole matrix).
+#                  jobs — every scenario except `reboot` and `zfs-drill`,
+#                  which only the VM harness can do. Manual dispatch: toggle
+#                  "run_docker" and pick one scenario (or `all` for the whole
+#                  matrix).
 #   vm-tests     : tests/vm-run.sh <scenario> — the same deploy in a REAL
 #                  Ubuntu VM under qemu/KVM (KVM is available on hosted x64
 #                  runners; the harness falls back to TCG emulation if not).
@@ -47,6 +48,9 @@ on:
           - restore-fresh
           - retention
           - users-provision
+          - archive-import
+          - archive-external
+          - store-apps
           - upgrade-nc-major
           - upgrade-nc-minor
           - upgrade-pg-major
@@ -66,6 +70,7 @@ on:
           - full
           - reset
           - reboot
+          - zfs-drill
           - backup-drill
           - mirror-drill
           - restore-fresh
@@ -139,6 +144,9 @@ jobs:
           - restore-fresh
           - retention
           - users-provision
+          - archive-import
+          - archive-external
+          - store-apps
           - upgrade-nc-major
           - upgrade-nc-minor
           - upgrade-pg-major

@@ -359,6 +359,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
             || { echo "share with member $m failed: $RESP" >&2; exit 1; }
           echo "archive: shared '$NAME' with member $m"
         done
+        # share-aware filecache refresh: after the shares exist, a second scan
+        # updates the shared nodes' cached permissions — without it the
+        # recipients' DAV resolves the subtree 404 on write ops (delete etc.)
+        OCC files:scan --path="${archiveOwner}/files/$NAME" 2>&1 | tail -4
 
         touch ${migrationState}/import-complete
         echo "archive: import complete — '$NAME' shared with ${archiveShareGroup} members"
