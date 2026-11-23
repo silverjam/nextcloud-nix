@@ -32,6 +32,10 @@ printf 'old payload\n' > "$SRC/2007/oldest.txt"
 touch -d '2007-01-05 03:00' "$SRC/2007/oldest.txt"
 printf 'newer\n' > "$SRC/2024/newer.txt"
 printf 'top\n' > "$SRC/top.txt"
+mkdir -p "$SRC/videos"
+export PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
+FF=$(nix build --no-link --print-out-paths .#ffmpeg 2>/dev/null | tail -1)/bin/ffmpeg
+"$FF" -hide_banner -loglevel error -y -f lavfi -i "testsrc=size=320x240:rate=10" -t 2 -c:v mjpeg -pix_fmt yuvj422p "$SRC/videos/legacy-cam.mov"
 sed -i 's|archiveSource = ".*";|archiveSource = "/var/archives-src";|' /test/flake.nix
 
 step "import: run the real recipe"
@@ -82,6 +86,17 @@ echo "$OUT" | grep -aq 'already imported' || fail "rerun did not skip the copy p
 echo "$OUT" | grep -aq 'share already present' || fail "rerun did not detect the share"
 ok "rerun skips copy + share"
 
+step "transcode: undecodable mjpeg gets an h264 sibling"
+NC=$(nix eval --raw .#packages.x86_64-linux.nextcloud.outPath 2>/dev/null)
+PHP=$(nix eval --raw .#packages.x86_64-linux.php.outPath 2>/dev/null)
+OCC2() { sudo -u nextcloud env HOME=/var/lib/nextcloud NEXTCLOUD_CONFIG_DIR=/var/lib/nextcloud/config "$PHP/bin/php" "$NC/occ" "$@"; }
+nix run .#nc-transcode-unplayable >/dev/null
+CONV="/var/lib/nextcloud/data/archive/files/Archive 2007-2026/videos/legacy-cam.mp4"
+test -f "$CONV" || fail "transcoded sibling mp4 missing"
+C=$(ffprobe -v quiet -show_entries stream=codec_name,codec_type -of csv=p=0 "$CONV" 2>/dev/null | head -1)
+case "$C" in *"h264,video"*) ;; *) fail "converted file is not h264 (got: $C)";; esac
+[ -f "$SRC/videos/legacy-cam.mov" ] || fail "original mov was removed"
+ok "transcode made an h264 sibling, original preserved"
 step "gate: mirror-remove executes only with import-complete + CONFIRM"
 mkdir -p /var/backups/disaster-mirror-sdc1
 printf x > /var/backups/disaster-mirror-sdc1/f.txt
