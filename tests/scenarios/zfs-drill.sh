@@ -121,6 +121,25 @@ zfs list -t snapshot -H -o name drill-primary/nextcloud | tail -1 | grep -aq 'sy
   || fail "newest sync snapshot missing"
 ok "prune clamped to floor ($N snapshots)"
 
+step "retirement: gated destroy of the archive datasets (replicate adapts)"
+MS=/var/backups/nextcloud/migration-state
+ERR="$(nix run .#nc-archive-retire 2>&1 >/dev/null || true)"
+echo "$ERR" | grep -aq 'import-complete' \
+  || fail "retire did not require import-complete (got: $ERR)"
+touch "$MS/import-complete"
+ERR="$(nix run .#nc-archive-retire 2>&1 >/dev/null || true)"
+echo "$ERR" | grep -aq 'CONFIRM' \
+  || fail "retire ran without CONFIRM (got: $ERR)"
+CONFIRM=retire-archive nix run .#nc-archive-retire >/dev/null
+zfs list -H -o name drill-primary/archive >/dev/null 2>&1 \
+  && fail "frozen archive dataset survived retirement"
+[ -f "$MS/archive-retired" ] || fail "archive-retired stamp missing"
+nix run .#zfs-replicate 2>&1 | grep -aq 'archive datasets retired' \
+  || fail "replicate did not skip the retired archive datasets"
+nix run .#zfs-replicate >/dev/null 2>&1 \
+  || fail "replicate failed after retirement"
+ok "retire gated+executed, replicate adapts"
+
 
 step "final verify-migration + teardown"
 nix run .#zfs-verify-migration
