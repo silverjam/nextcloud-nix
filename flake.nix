@@ -195,6 +195,40 @@
         echo "disaster mirror removed — $(df -h / | tail -1 | awk '{print $4}') free on /"
       '';
 
+      ncArchiveRetire = pkgs.writeShellScriptBin "nc-archive-retire" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
+        # gates: option B must be imported and verified, then a typed confirm
+        test -f ${migrationState}/migration-complete \
+          || { echo "refusing: migration-complete missing (run zfs-verify-migration first)" >&2; exit 1; }
+        test -f ${migrationState}/import-complete \
+          || { echo "refusing: import-complete missing (finish nc-import-archive first — this destroys the frozen pre-NC copy)" >&2; exit 1; }
+        [ "''${CONFIRM:-}" = "retire-archive" ] \
+          || { echo "This DESTROYS the frozen pre-NC copies: ${archiveDataset} + ${zfsPoolBackup}/archive, including all their snapshots." >&2
+               echo "The verified NC working copy is the surviving copy. Set CONFIRM=retire-archive to proceed." >&2; exit 1; }
+        # retire the interim bind first (its dataset is about to disappear)
+        systemctl disable --now nextcloud-archive-bind.service 2>/dev/null || true
+        # retire the interim member shares, scoped to the interim folder only
+        NAME="${archiveBindMountName}"
+        PW="$(grep -ah "^uid=${archiveOwner} password=" ${ncRoot}/provision-credentials-*.log 2>/dev/null \
+          | sed -E 's/^uid=[^ ]+ password=([^ ]+).*/\1/' | tail -1 || true)"
+        if [ -n "$PW" ]; then
+          IDS="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -G \
+            --data-urlencode "path=/$NAME" \
+            "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json" \
+            | grep -aoE '"id":"[0-9]+"' | grep -oE '[0-9]+')"
+          for i in $IDS; do
+            curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -X DELETE \
+              "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares/$i" >/dev/null 2>&1 || true
+          done
+        fi
+        echo "retire: destroying ${archiveDataset} and the replica pair"
+        zfs destroy -r ${archiveDataset} 2>/dev/null || true
+        zfs destroy -r ${zfsPoolBackup}/archive 2>/dev/null || true
+        touch ${migrationState}/archive-retired
+        echo "retire: done — replication skips the archive datasets from now on; space reclaimed as the pools free lazily"
+      '';
+
       ncImportArchive = pkgs.writeShellScriptBin "nc-import-archive" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
@@ -2001,6 +2035,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         "zfs-verify-migration" = zfsVerifyMigration;
         "nc-import-archive" = ncImportArchive;
         "nc-archive-share" = ncArchiveShare;
+        "nc-archive-retire" = ncArchiveRetire;
         "zfs-check" = zfsCheck;
         "provisioned-passwords" = zfsProvisionedPasswords;
         nextcloud = nc;
@@ -2064,6 +2099,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
                 "${zfsVerifyMigration}/bin/zfs-verify-migration" \
                 "${ncImportArchive}/bin/nc-import-archive" \
                 "${ncArchiveShare}/bin/nc-archive-share" \
+                "${ncArchiveRetire}/bin/nc-archive-retire" \
                 "${zfsCheck}/bin/zfs-check" \
                 "${ncProvisionJob}/bin/nc-provision" \
                 "${zfsProvisionedPasswords}/bin/provisioned-passwords" \
