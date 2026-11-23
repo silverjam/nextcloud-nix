@@ -1076,6 +1076,33 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         // The bundled go-vod binary spawns per playback from bin-ext.
         $CONFIG['memories.vod.disable'] = false;
         $CONFIG['memories.vod.nc_url'] = 'http://127.0.0.1:55555';
+        // video/grid previews: add the Movie provider (video/* via ffmpeg) and
+        // pin the binaries from the tools env explicitly - the Movie provider
+        // reads preview_ffprobe_path and derives its ffmpeg from that dir
+        $CONFIG['preview_ffmpeg_path'] = '${ncToolsEnv}/bin/ffmpeg';
+        $CONFIG['preview_ffprobe_path'] = '${ncToolsEnv}/bin/ffprobe';
+        $CONFIG['enabledPreviewProviders'] = [
+          'OC\\Preview\\PNG',
+          'OC\\Preview\\JPEG',
+          'OC\\Preview\\GIF',
+          'OC\\Preview\\BMP',
+          'OC\\Preview\\XBitmap',
+          'OC\\Preview\\MP3',
+          'OC\\Preview\\TXT',
+          'OC\\Preview\\MarkDown',
+          'OC\\Preview\\Krita',
+          'OC\\Preview\\HEIC',
+          'OC\\Preview\\Photoshop',
+          'OC\\Preview\\Postscript',
+          'OC\\Preview\\SVG',
+          'OC\\Preview\\TIFF',
+          'OC\\Preview\\WEBP',
+          'OC\\Preview\\Movie',
+        ];
+        // keep preview sizes sane for a 577G library (the docs' tuning)
+        $CONFIG['preview_max_x'] = 2048;
+        $CONFIG['preview_max_y'] = 2048;
+        $CONFIG['jpeg_quality'] = 60;
         $CONFIG['trashbin_retention_obligation']  = 'disabled'; // trash persists until manually expunged
         $CONFIG['versions_retention_obligation']  = 'disabled'; // file versions persist until manually purged
         file_put_contents($configFile, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n");
