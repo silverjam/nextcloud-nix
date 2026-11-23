@@ -311,7 +311,7 @@
           echo "archive: already imported ($(< "$CNT") files) — skipping the copy pass"
         else
           install -d -m 0770 -o ${ncUser} -g ${ncUser} "$TDIR"
-          rsync -aH --chown=${ncUser}:${ncUser} --info=progress2 \
+          "${pkgs.rsync}/bin/rsync" -aH --chown=${ncUser}:${ncUser} --info=progress2 \
             --exclude '/System Volume Information' --exclude '/$RECYCLE.BIN' \
             "${archiveSource}/" "$TDIR"/
           FS="$(find "${archiveSource}" -type f | wc -l)"
