@@ -1250,6 +1250,23 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         fi
 
         systemctl daemon-reload
+        echo "== restarting to pick up the current build =="
+        systemctl daemon-reload
+        # restarts run BEFORE the enable list: the bind's Requires chain
+        # (init+provision) fires at enable time and must find the fresh units
+        # (e.g. socket-configured redis) already running
+        systemctl restart nextcloud-redis.service
+        systemctl restart nextcloud-db.service
+        systemctl restart nextcloud-fpm.service
+        systemctl restart nextcloud-caddy.service
+        systemctl restart nextcloud-init.service
+        systemctl restart nextcloud-backup.timer nextcloud-snapshot.timer
+        # shellcheck disable=SC2157
+        if [ -n "${dataSyncTarget}" ]; then
+          systemctl restart nextcloud-data-sync.timer
+        fi
+        systemctl restart nextcloud-provision.service
+
         echo "== enabling services =="
         systemctl enable --now \
           nextcloud-redis.service \
@@ -1265,19 +1282,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         if [ -n "${dataSyncTarget}" ]; then
           systemctl enable --now nextcloud-data-sync.timer
         fi
-
-        echo "== restarting to pick up the current build =="
-        systemctl restart nextcloud-redis.service
-        systemctl restart nextcloud-db.service
-        systemctl restart nextcloud-fpm.service
-        systemctl restart nextcloud-caddy.service
-        systemctl restart nextcloud-init.service
-        systemctl restart nextcloud-backup.timer nextcloud-snapshot.timer
-        # shellcheck disable=SC2157
-        if [ -n "${dataSyncTarget}" ]; then
-          systemctl restart nextcloud-data-sync.timer
-        fi
-        systemctl restart nextcloud-provision.service
 
         echo "== ffmpeg + p7zip (nix env) + music app =="
         # the music app installs from the NC app store: platform versioning
