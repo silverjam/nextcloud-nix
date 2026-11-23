@@ -255,7 +255,7 @@
         # string a backslash is literal — a single trailing backslash here is
         # what bash needs for the EOL continuation (see tests + AGENTS.md)
         while IFS= read -r -d ''' f; do
-          V="$(FFPROBE -v quiet -show_entries stream=codec_name,codec_type -of csv=p=0 "$f" 2>/dev/null | tr '\n' ' ' || true)"
+          V="$("$FFPROBE" -v quiet -show_entries stream=codec_name,codec_type -of csv=p=0 "$f" 2>/dev/null | tr '\n' ' ' || true)"
           case "$V" in
             *mjpeg*|*h263*|*mpeg4*|*dvvideo*|*msvideo*|*wmv1*|*wmv2*|*wmav2*|*pcm_*|*gsm*|*adpcm*)
               : # needs conversion
@@ -265,7 +265,7 @@
           OUT="''${f%.*}.mp4"          # same basename => converts in place for mp4 sources
           TMP="$OUT.part"
           echo "transcode: $f"
-          "$FFMPEG" -hide_banner -loglevel warning -y -i "$f" \
+          "$FFMPEG" -hide_banner -loglevel warning -y -i "$f" -f mp4 \
             -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
             -c:a aac -b:a 128k -movflags +faststart "$TMP"
           mv -f "$TMP" "$OUT"
