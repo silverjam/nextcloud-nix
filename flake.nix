@@ -1187,21 +1187,12 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         systemctl restart nextcloud-provision.service
 
         echo "== ffmpeg + p7zip (nix env) + music app =="
-        # the nix-built tools env (ffmpeg, p7zip) rides the units' built-in
-        # PATH (no /usr/local/bin symlinking); the music app installs from
-        # the NC app store: platform versioning and code signatures are the
-        # store's job; the version follows the store's latest-compatible
-        # release at install time (upgrades via app:upgrade). Vendoring was
-        # dropped: the music project's 3.x tarballs are store-only (public
-        # GitHub releases cap at NC 32)
+        # the music app installs from the NC app store: platform versioning
+        # and code signatures are the store's job; the version follows the
+        # store's latest-compatible release at install time (upgrades happen
+        # via app:upgrade). Vendoring was dropped: the music project's 3.x
+        # tarballs are store-only (public GitHub releases cap at NC 32)
         install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
-        nix run .#occ -- app:install music 2>&1 | tail -1 || true
-        nix run .#occ -- app:enable music 2>&1 | tail -1 || true
-        # the earlier deployment pattern symlinked nix binaries into
-        # /usr/local/bin - remove those once (the units carry the env now)
-        for b in ffmpeg ffprobe 7z 7za 7zr; do
-          rm -f "/usr/local/bin/$b" 2>/dev/null || true
-        done
         # store apps: the flake's storeApps list declares which apps are
         # wanted; the NC app store handles platform versioning + signatures
         # (app:install + app:enable are both idempotent; app versions follow
