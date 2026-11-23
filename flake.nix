@@ -1085,6 +1085,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       deploy = pkgs.writeShellScriptBin "nextcloud-deploy" ''
         set -euo pipefail
         export PATH="/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        export NIX_CONFIG="experimental-features = nix-command flakes"
 
         if [ "$(id -u)" -ne 0 ]; then
           echo "nextcloud-deploy: needs root, re-running with sudo..."
