@@ -58,8 +58,14 @@ ASSERT_HEALTHY() {
     systemctl is-active --quiet "$u" || fail "$u not active ($EXPECTED_NC)"
   done
   local out
-  out="$(curl -s -m 10 "$BASE_URL/status.php" || true)"
-  echo "$out" | grep -q '"installed":true' || fail "status.php not installed ($out)"
+  # retry the status assert: the deploy's fpm/config refresh window can
+  # briefly serve an empty capture (the prelude's install assert retries too)
+  for a in 1 2 3 4 5 6; do
+    out="$(curl -s -m 10 "$BASE_URL/status.php" || true)"
+    echo "$out" | grep -aq '"installed":true' && break
+    sleep 2
+  done
+  echo "$out" | grep -aq '"installed":true' || fail "status.php not installed ($out)"
 
   local marker
   marker="$(MARKER_VALUE)"
