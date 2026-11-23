@@ -454,7 +454,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       # NC store apps the deploy installs + enables; add an app here and a
       # deploy brings it in (the store resolves the platform-compatible
       # version, NC 34 currently -> files_archive 1.3.2)
-      storeApps = [ "music" "files_archive" ];
+      storeApps = [ "music" "files-archive" ];
       storeAppsJoined = lib.concatStringsSep " " storeApps;
       # interim: the archive dataset binds INTO the datadir (zero copy) and is
       # served as a native shared folder; option B's copy replaces this later
