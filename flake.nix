@@ -792,7 +792,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=/etc/nextcloud-bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         RuntimeDirectory=nextcloud
         RuntimeDirectoryMode=0755
         StateDirectory=nextcloud
@@ -1084,7 +1084,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
 
       deploy = pkgs.writeShellScriptBin "nextcloud-deploy" ''
         set -euo pipefail
-        export PATH="/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        export PATH="/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
         if [ "$(id -u)" -ne 0 ]; then
           echo "nextcloud-deploy: needs root, re-running with sudo..."
@@ -1164,6 +1164,24 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           systemctl restart nextcloud-data-sync.timer
         fi
         systemctl restart nextcloud-provision.service
+
+        echo "== ffmpeg (nix) + music app =="
+        # nix-built ffmpeg lands on a stable dir that carries the fpm PATH; the
+        # store path is resolved at deploy time so versions follow the flake
+        install -d -m 0755 /etc/nextcloud-bin
+        FFBIN="$(nix build --no-link --print-out-paths .#ffmpeg 2>/dev/null | tail -1)"
+        ln -sfn "$FFBIN/bin/ffmpeg" /etc/nextcloud-bin/ffmpeg
+        ln -sfn "$FFBIN/bin/ffprobe" /etc/nextcloud-bin/ffprobe
+        # the music app is vendored: versioned tarball pinned in the flake by
+        # hash, extracted into the store-apps path at deploy — app version
+        # upgrades are flake edits, never manual downloads
+        install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
+        MUSIC_TGZ="$(nix build --no-link --print-out-paths .#music-app 2>/dev/null | tail -1)"
+        rm -rf ${ncStoreApps}/music
+        tar xzf "$MUSIC_TGZ" -C ${ncStoreApps}
+        chown -R ${ncUser}:${ncUser} ${ncStoreApps}/music
+        nix run .#occ -- app:enable music 2>&1 | tail -1 || true
+        systemctl restart nextcloud-fpm.service
 
         if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
           if ! ufw status | grep -q "${webPort}/tcp"; then
@@ -2063,6 +2081,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         nextcloud = nc;
         php = phpEnv;
         postgresql = pg;
+        ffmpeg = pkgs.ffmpeg;
+        music-app = pkgs.fetchurl {
+          url = "https://github.com/nc-music/oc-music/releases/download/v2.6.2/music_2.6.2_for_owncloud.tar.gz";
+          hash = "sha256-SJY19GftLgQZou9Lghux+zDY1VxVxnRUSZbaAGg2Zx4=";
+        };
         caddyfile = caddyfile;
         default = deploy;
       };
