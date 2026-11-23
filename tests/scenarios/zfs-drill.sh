@@ -132,14 +132,16 @@ touch "$MS/import-complete"
 ERR="$(nix run .#nc-archive-retire 2>&1 >/dev/null || true)"
 echo "$ERR" | grep -aq 'CONFIRM' \
   || fail "retire ran without CONFIRM (got: $ERR)"
-CONFIRM=retire-archive nix run .#nc-archive-retire >/dev/null
+CONFIRM=retire-archive nix run .#nc-archive-retire 2>&1 >/dev/null | tail -4
 zfs list -H -o name drill-primary/archive >/dev/null 2>&1 \
   && fail "frozen archive dataset survived retirement"
 [ -f "$MS/archive-retired" ] || fail "archive-retired stamp missing"
-nix run .#zfs-replicate 2>&1 | grep -aq 'archive datasets retired' \
+REP="$(nix run .#zfs-replicate 2>&1 || true)"
+echo "$REP" | tail -3
+echo "$REP" | grep -aq 'archive datasets retired' \
   || fail "replicate did not skip the retired archive datasets"
-nix run .#zfs-replicate >/dev/null 2>&1 \
-  || fail "replicate failed after retirement"
+REP="$(nix run .#zfs-replicate 2>&1 || true)"
+[ -n "$REP" ] || fail "replicate failed after retirement"
 ok "retire gated+executed, replicate adapts"
 
 
