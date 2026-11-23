@@ -34,7 +34,7 @@ printf 'newer\n' > "$SRC/2024/newer.txt"
 printf 'top\n' > "$SRC/top.txt"
 mkdir -p "$SRC/videos"
 export PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH
-FF=$(nix build --no-link --print-out-paths .#ffmpeg | tail -1)/bin/ffmpeg
+FF=$(nix build --no-link --print-out-paths .#ffmpeg | head -1)/bin/ffmpeg
 [ -x "$FF" ] || fail "ffmpeg missing after nix build"
 "$FF" -hide_banner -loglevel error -y -f lavfi -i "testsrc=size=320x240:rate=10" -t 2 -c:v mjpeg -pix_fmt yuvj422p "$SRC/videos/legacy-cam.mov"
 sed -i 's|archiveSource = ".*";|archiveSource = "/var/archives-src";|' /test/flake.nix
