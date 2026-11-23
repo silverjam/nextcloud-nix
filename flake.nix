@@ -629,8 +629,9 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       # Cache-only (no persistence), loopback TCP, dedicated dynamic user.
       redisMaxmemory = "2gb";
       redisConf = pkgs.writeText "redis-nc.conf" ''
-        bind 127.0.0.1
-        port 6379
+        port 0
+        unixsocket /run/redis-nc/redis.sock
+        unixsocketperm 0770
         protected-mode yes
         save ""
         appendonly no
@@ -645,8 +646,9 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         [Service]
         Type=simple
         DynamicUser=yes
+        Group=${ncUser}
         RuntimeDirectory=redis-nc
-        RuntimeDirectoryMode=0755
+        RuntimeDirectoryMode=0770
         StateDirectory=redis-nc
         StateDirectoryMode=0700
         ExecStart=${pkgs.redis}/bin/redis-server ${redisConf}
@@ -1065,6 +1067,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         $CONFIG['memcache.local']  = '\\OC\\Memcache\\APCu';
         $CONFIG['memcache.distributed'] = '\\OC\\Memcache\\Redis';
         $CONFIG['memcache.locking'] = '\\OC\\Memcache\\Redis';
+        $CONFIG['redis'] = [
+          'host' => '/run/redis-nc/redis.sock',
+          'port' => 0,
+        ];
         $CONFIG['trashbin_retention_obligation']  = 'disabled'; // trash persists until manually expunged
         $CONFIG['versions_retention_obligation']  = 'disabled'; // file versions persist until manually purged
         file_put_contents($configFile, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n");
