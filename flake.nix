@@ -590,6 +590,14 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       # ------------------------------------------------------------------
       ncUser = "nextcloud";
       webUser = "nc-caddy"; # caddy runs as this, gets socket access via group
+      # the runtime tools the NC services need on their PATH (nix-built env;
+      # the unit PATH lines bake this store path at eval time - no symlinks
+      # into system directories)
+      ncToolsEnv = pkgs.buildEnv {
+        name = "nextcloud-host-tools";
+        paths = [ pkgs.ffmpeg pkgs.p7zip ];
+        pathsToLink = [ "/bin" ];
+      };
       ncRoot = "/var/lib/nextcloud"; # nextcloud state root
       ncConfig = "${ncRoot}/config"; # config.php lives here (NEXTCLOUD_CONFIG_DIR)
       ncDataDir = "${ncRoot}/data"; # nextcloud 'datadir' (user files)
@@ -804,7 +812,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=${ncToolsEnv}/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         RuntimeDirectory=nextcloud
         RuntimeDirectoryMode=0755
         StateDirectory=nextcloud
@@ -873,7 +881,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         RemainAfterExit=true
         TimeoutStartSec=15min
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=${ncToolsEnv}/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         StateDirectory=nextcloud
         ExecStart=${initScript}
 
@@ -893,7 +901,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=${ncToolsEnv}/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${phpEnv}/bin/php ${nc}/occ background:cron
       '';
 
@@ -1178,21 +1186,21 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         fi
         systemctl restart nextcloud-provision.service
 
-        echo "== ffmpeg (nix) + music app =="
-        # nix-built ffmpeg lands on the FHS standard local-bin path; the store
-        # path is resolved at deploy time so versions follow the flake. The
-        # units' PATH carries /usr/local/bin, which is what lets the music app
-        # (and anything else site-local) find these.
-        FFBIN="$(nix build --no-link --print-out-paths .#ffmpeg 2>/dev/null | tail -1)"
-        ln -sfn "$FFBIN/bin/ffmpeg" /usr/local/bin/ffmpeg
-        ln -sfn "$FFBIN/bin/ffprobe" /usr/local/bin/ffprobe
-        # p7zip: the archive manager's 7z backend shells out to the classic
-        # 7z/7za/7zr binaries; expose whichever the package provides
-        P7="$(nix build --no-link --print-out-paths .#p7zip 2>/dev/null | tail -1)"
-        for b in 7z 7za 7zr; do
-          if [ -f "$P7/bin/$b" ]; then
-            ln -sfn "$P7/bin/$b" /usr/local/bin/$b
-          fi
+        echo "== ffmpeg + p7zip (nix env) + music app =="
+        # the nix-built tools env (ffmpeg, p7zip) rides the units' built-in
+        # PATH (no /usr/local/bin symlinking); the music app installs from
+        # the NC app store: platform versioning and code signatures are the
+        # store's job; the version follows the store's latest-compatible
+        # release at install time (upgrades via app:upgrade). Vendoring was
+        # dropped: the music project's 3.x tarballs are store-only (public
+        # GitHub releases cap at NC 32)
+        install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
+        nix run .#occ -- app:install music 2>&1 | tail -1 || true
+        nix run .#occ -- app:enable music 2>&1 | tail -1 || true
+        # the earlier deployment pattern symlinked nix binaries into
+        # /usr/local/bin - remove those once (the units carry the env now)
+        for b in ffmpeg ffprobe 7z 7za 7zr; do
+          rm -f "/usr/local/bin/$b" 2>/dev/null || true
         done
         # store apps: the flake's storeApps list declares which apps are
         # wanted; the NC app store handles platform versioning + signatures
@@ -1609,7 +1617,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=${ncToolsEnv}/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${ncBackupJob}/bin/nc-backup full
         TimeoutStartSec=4h
         NoNewPrivileges=true
@@ -1645,7 +1653,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=${ncToolsEnv}/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${ncBackupJob}/bin/nc-backup incremental
         TimeoutStartSec=2h
         NoNewPrivileges=true
@@ -2038,7 +2046,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=${ncToolsEnv}/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${ncProvisionJob}/bin/nc-provision
         TimeoutStartSec=10min
         NoNewPrivileges=true
@@ -2058,7 +2066,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         User=${ncUser}
         Group=${ncUser}
         UMask=0077
-        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=${ncToolsEnv}/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${ncDataSyncJob}/bin/nc-data-sync
         TimeoutStartSec=4h
         NoNewPrivileges=true
