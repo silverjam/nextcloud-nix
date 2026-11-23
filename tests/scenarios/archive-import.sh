@@ -89,9 +89,9 @@ for a in 1 2 3 4 5 6; do
   sleep 3
 done
 expect_equal 204 "$CODE" "DELETE through the share"
-expect_equal 1 \
-  "$(Q "SELECT count(*) FROM oc_files_trash")" \
-  "deleted file sits in trash (retention disabled, nothing auto-expired)"
+expect_equal 2 \
+  "$(Q "SELECT count(*) FROM oc_files_trash WHERE deleted_by='jason' AND id='top.txt'")" \
+  "deleted file sits in trash (recipient + owner entries; retention disabled)"
 ok "delete-through-UI kept in trash"
 
 step "import: rerun is idempotent"

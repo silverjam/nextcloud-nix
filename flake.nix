@@ -249,8 +249,11 @@
         [ -x "$FFMPEG" ] || { echo "ffmpeg missing in ncToolsEnv (deploy first)" >&2; exit 1; }
         echo "transcode: scanning $TDIR for undecodable video/audio codecs"
         N=0
-        find "$TDIR" -type f \( -iname '*.mov' -o -iname '*.avi' -o -iname '*.wmv' \\
-          -o -iname '*.mkv' -o -iname '*.mpg' -o -iname '*.mpeg' -o -iname '*.mp4' \) -print0 |
+        # a plain `find | while` pipeline would run the loop in a subshell:
+        # the N counter increments would never reach the summary echo. Feed
+        # the loop via process substitution instead. NOTE: in a nix indented
+        # string a backslash is literal — a single trailing backslash here is
+        # what bash needs for the EOL continuation (see tests + AGENTS.md)
         while IFS= read -r -d ''' f; do
           V="$(FFPROBE -v quiet -show_entries stream=codec_name,codec_type -of csv=p=0 "$f" 2>/dev/null | tr '\n' ' ' || true)"
           case "$V" in
@@ -262,12 +265,13 @@
           OUT="''${f%.*}.mp4"          # same basename => converts in place for mp4 sources
           TMP="$OUT.part"
           echo "transcode: $f"
-          "$FFMPEG" -hide_banner -loglevel warning -y -i "$f" \\
-            -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \\
+          "$FFMPEG" -hide_banner -loglevel warning -y -i "$f" \
+            -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
             -c:a aac -b:a 128k -movflags +faststart "$TMP"
           mv -f "$TMP" "$OUT"
           N=$((N + 1))
-        done
+        done < <(find "$TDIR" -type f \( -iname '*.mov' -o -iname '*.avi' -o -iname '*.wmv' \
+          -o -iname '*.mkv' -o -iname '*.mpg' -o -iname '*.mpeg' -o -iname '*.mp4' \) -print0)
         echo "transcode: done ($N files converted to h264/aac)"
       '';
 
@@ -344,6 +348,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           --data-urlencode "path=/$NAME" \
           "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json" \
           | grep -aoE '"share_with":"[a-z0-9_.@-]+"' || true)"
+        CREATED=0
         for m in $MEMBERS; do
           [ "$m" = "${archiveOwner}" ] && continue
           case "$HELD" in
@@ -358,7 +363,9 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           echo "$RESP" | grep -aq '"statuscode":200' \
             || { echo "share with member $m failed: $RESP" >&2; exit 1; }
           echo "archive: shared '$NAME' with member $m"
+          CREATED=$((CREATED + 1))
         done
+        [ "$CREATED" = 0 ] && echo "archive: member shares already present for all of ${archiveShareGroup}"
         # share-aware filecache refresh: after the shares exist, a second scan
         # updates the shared nodes' cached permissions — without it the
         # recipients' DAV resolves the subtree 404 on write ops (delete etc.)
