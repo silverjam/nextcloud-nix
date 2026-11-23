@@ -68,12 +68,12 @@ PW="$(grep -ah '^uid=jason password=' /var/lib/nextcloud/provision-credentials-*
 expect_equal 2 \
   "$(Q "SELECT count(*) FROM oc_share WHERE share_type=0 AND permissions=15 AND share_with IN ('jason','josphine')")" \
   "one type-0 user-share per member (NC 34 drops type-3 group recipients)"
-# the recipient-side mount row resolves lazily on the recipient's first DAV
-# request — retry instead of assuming instant visibility
+# DAV hrefs are URL-encoded (Archive%202007-2026): grep the encoded form. The
+# recipient-side mount can also lag just-created shares — retry either way.
 vis=""
 for a in 1 2 3 4 5 6 7 8; do
   curl -sS -u "jason:$PW" -X PROPFIND -H 'Depth: 1' "$BASE_URL/remote.php/dav/files/jason/" \
-    | grep -aq 'Archive 2007-2026' && vis=1 && break
+    | grep -aq 'Archive%202007-2026' && vis=1 && break
   sleep 4
 done
 [ -n "$vis" ] || fail "jason does not see the shared folder (mount never resolved)"
