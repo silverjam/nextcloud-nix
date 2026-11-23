@@ -2240,6 +2240,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         postgresql = pg;
         ffmpeg = pkgs.ffmpeg;
         p7zip = pkgs.p7zip;
+        redis = pkgs.redis;
         files-archive-app = pkgs.fetchurl {
           url = "https://github.com/rotdrop/nextcloud-app-files-archive/releases/download/v1.3.2/files_archive-1.3.2.tar.gz";
           hash = "sha256-3pXkwvQ1O8+CajdXLzIcV/X7E7U85yCrKbKXgwAmJXw=";
