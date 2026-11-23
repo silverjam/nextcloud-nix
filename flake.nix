@@ -1765,7 +1765,9 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           || { echo "backup pool missing" >&2; exit 1; }
         STAMP="sync-$(date +%Y%m%d%H%M%S)"
         # manual + timer runs can land in the same second — never collide
-        while zfs list -H -o name "${zfsPoolPrimary}/nextcloud@$STAMP" >/dev/null 2>&1; do
+        # (both dataset snapshots checked)
+        while zfs list -H -o name "${zfsPoolPrimary}/nextcloud@$STAMP" >/dev/null 2>&1 \
+          || zfs list -H -o name "${archiveDataset}@$STAMP" >/dev/null 2>&1; do
           sleep 1
           STAMP="sync-$(date +%Y%m%d%H%M%S)"
         done
