@@ -625,6 +625,41 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       # ------------------------------------------------------------------
       # Names & paths (single source of truth for units, Caddyfile, scripts)
       # ------------------------------------------------------------------
+      # Redis (nix-built): the distributed + locking memcache Memories wants.
+      # Cache-only (no persistence), loopback TCP + unix socket, dedicated
+      # dynamic user.
+      redisConf = pkgs.writeText "redis-nc.conf" ''
+        bind 127.0.0.1
+        port 6379
+        protected-mode yes
+        save ""
+        appendonly no
+        maxmemory 512mb
+        maxmemory-policy allkeys-lru
+      '';
+      redisUnit = pkgs.writeText "nextcloud-redis.service" ''
+        [Unit]
+        Description=Redis for Nextcloud memcache (nix-managed, cache-only)
+        After=network.target
+
+        [Service]
+        Type=simple
+        DynamicUser=yes
+        RuntimeDirectory=redis-nc
+        RuntimeDirectoryMode=0755
+        StateDirectory=redis-nc
+        StateDirectoryMode=0700
+        ExecStart=${pkgs.redis}/bin/redis-server ${redisConf}
+        Restart=on-failure
+        RestartSec=3
+        NoNewPrivileges=true
+        PrivateTmp=true
+        ProtectSystem=strict
+        ProtectHome=true
+
+        [Install]
+        WantedBy=multi-user.target
+      '';
       ncUser = "nextcloud";
       webUser = "nc-caddy"; # caddy runs as this, gets socket access via group
       # the runtime tools the NC services need on their PATH (nix-built env;
@@ -699,6 +734,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
                   pdo
                   pdo_pgsql
                   posix
+                  redis
                   session
                   simplexml
                   sodium
@@ -1027,7 +1063,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           [ 'path' => '${ncStoreApps}',    'url' => '/store-apps', 'writable' => true  ],
         ];
         $CONFIG['memcache.local']  = '\\OC\\Memcache\\APCu';
-        $CONFIG['memcache.locking'] = '\\OC\\Memcache\\APCu';
+        $CONFIG['memcache.distributed'] = '\\OC\\Memcache\\Redis';
+        $CONFIG['memcache.locking'] = '\\OC\\Memcache\\Redis';
         $CONFIG['trashbin_retention_obligation']  = 'disabled'; // trash persists until manually expunged
         $CONFIG['versions_retention_obligation']  = 'disabled'; // file versions persist until manually purged
         file_put_contents($configFile, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n");
@@ -1184,6 +1221,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         install -m 0644 ${snapshotTimer} ${unitDir}/nextcloud-snapshot.timer
         install -m 0644 ${dataSyncService} ${unitDir}/nextcloud-data-sync.service
         install -m 0644 ${dataSyncTimer} ${unitDir}/nextcloud-data-sync.timer
+        install -m 0644 ${redisUnit} ${unitDir}/nextcloud-redis.service
         install -m 0644 ${provisionService} ${unitDir}/nextcloud-provision.service
         install -m 0644 ${archiveBindService} ${unitDir}/nextcloud-archive-bind.service
         # retire the pre-rename .mount unit (idempotent; safe on fresh hosts)
@@ -1208,6 +1246,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         systemctl daemon-reload
         echo "== enabling services =="
         systemctl enable --now \
+          nextcloud-redis.service \
           nextcloud-archive-bind.service \
           nextcloud-db.service \
           nextcloud-fpm.service \
