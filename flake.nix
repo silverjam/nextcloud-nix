@@ -454,8 +454,15 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       # NC store apps the deploy installs + enables; add an app here and a
       # deploy brings it in (the store resolves the platform-compatible
       # version, NC 34 currently -> files_archive 1.3.2)
-      storeApps = [ "music" "files-archive" ];
+      storeApps = [ "music" ];
       storeAppsJoined = lib.concatStringsSep " " storeApps;
+      # the archive manager app is vendored: the author's release tarball,
+      # hash-pinned here (declared NC 33-35, so NC 34 is in range) and
+      # extracted into store-apps at deploy — app upgrades are flake edits
+      filesArchiveApp = pkgs.fetchurl {
+        url = "https://github.com/rotdrop/nextcloud-app-files-archive/releases/download/v1.3.2/files_archive-1.3.2.tar.gz";
+        hash = "sha256-3pXkwvQ1O8+CajdXLzIcV/X7E7U85yCrKbKXgwAmJXw=";
+      };
       # interim: the archive dataset binds INTO the datadir (zero copy) and is
       # served as a native shared folder; option B's copy replaces this later
       archiveBindMountName = "Archive (Read only)";
@@ -1188,6 +1195,12 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           nix run .#occ -- app:install "$a" 2>&1 | tail -1 || true
           nix run .#occ -- app:enable "$a" 2>&1 | tail -1 || true
         done
+        # the archive manager (vendored, hash-pinned)
+        FATA="$(nix build --no-link --print-out-paths .#files-archive-app 2>/dev/null | tail -1)"
+        rm -rf ${ncStoreApps}/files_archive
+        tar xzf "$FATA" -C ${ncStoreApps}
+        chown -R ${ncUser}:${ncUser} ${ncStoreApps}/files_archive
+        nix run .#occ -- app:enable files_archive 2>&1 | tail -1 || true
         systemctl restart nextcloud-fpm.service
 
         if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -2089,6 +2102,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         php = phpEnv;
         postgresql = pg;
         ffmpeg = pkgs.ffmpeg;
+        files-archive-app = pkgs.fetchurl {
+          url = "https://github.com/rotdrop/nextcloud-app-files-archive/releases/download/v1.3.2/files_archive-1.3.2.tar.gz";
+          hash = "sha256-3pXkwvQ1O8+CajdXLzIcV/X7E7U85yCrKbKXgwAmJXw=";
+        };
         caddyfile = caddyfile;
         default = deploy;
       };
