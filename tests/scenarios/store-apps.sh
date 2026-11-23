@@ -11,7 +11,7 @@ NC=$(nix eval --raw .#packages.x86_64-linux.nextcloud.outPath 2>/dev/null)
 PHP=$(nix eval --raw .#packages.x86_64-linux.php.outPath 2>/dev/null)
 RCLI=$(nix eval --raw .#packages.x86_64-linux.redis.outPath 2>/dev/null)/bin/redis-cli
 FF=$(nix eval --raw .#packages.x86_64-linux.ffmpeg.outPath 2>/dev/null)/bin/ffmpeg
-OCC() { sudo -u nextcloud env HOME=/var/lib/nextcloud NEXTCLOUD_CONFIG_DIR=/var/lib/nextcloud/config "$PHP/bin/php" "$NC/occ" "$@"; }
+OCC() { sudo -u nextcloud env HOME=/var/lib/nextcloud NEXTCLOUD_CONFIG_DIR=/var/lib/nextcloud/config OC_PASS="${OC_PASS:-}" NC_PASS="${NC_PASS:-}" "$PHP/bin/php" "$NC/occ" "$@"; }
 Q() { /usr/bin/sudo -u nextcloud -- "$PGBIN/bin/psql" -h /run/nextcloud-db -U nextcloud -d nextcloud -tAc "$1"; }
 
 step "store apps installed + enabled via storeApps list"
