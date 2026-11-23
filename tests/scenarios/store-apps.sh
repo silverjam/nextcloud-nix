@@ -30,7 +30,7 @@ step "redis memcache over unix socket"
 M=/run/redis-nc/redis.sock
 [ -S "$M" ] || fail "redis socket missing at $M"
 expect_equal 'PONG' \
-  "$(redis-cli -s "$M" ping 2>/dev/null)" \
+  "$("$RCLI" -s "$M" ping 2>/dev/null)" \
   "redis PONG over unix socket"
 grep -aqF "memcache.distributed' => '\\\\OC\\\\Memcache\\\\Redis'" /var/lib/nextcloud/config/config.php \
   || fail "memcache.distributed not switched to Redis in config.php"
