@@ -1186,6 +1186,14 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         FFBIN="$(nix build --no-link --print-out-paths .#ffmpeg 2>/dev/null | tail -1)"
         ln -sfn "$FFBIN/bin/ffmpeg" /usr/local/bin/ffmpeg
         ln -sfn "$FFBIN/bin/ffprobe" /usr/local/bin/ffprobe
+        # p7zip: the archive manager's 7z backend shells out to the classic
+        # 7z/7za/7zr binaries; expose whichever the package provides
+        P7="$(nix build --no-link --print-out-paths .#p7zip 2>/dev/null | tail -1)"
+        for b in 7z 7za 7zr; do
+          if [ -f "$P7/bin/$b" ]; then
+            ln -sfn "$P7/bin/$b" /usr/local/bin/$b
+          fi
+        done
         # store apps: the flake's storeApps list declares which apps are
         # wanted; the NC app store handles platform versioning + signatures
         # (app:install + app:enable are both idempotent; app versions follow
@@ -2102,6 +2110,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         php = phpEnv;
         postgresql = pg;
         ffmpeg = pkgs.ffmpeg;
+        p7zip = pkgs.p7zip;
         files-archive-app = pkgs.fetchurl {
           url = "https://github.com/rotdrop/nextcloud-app-files-archive/releases/download/v1.3.2/files_archive-1.3.2.tar.gz";
           hash = "sha256-3pXkwvQ1O8+CajdXLzIcV/X7E7U85yCrKbKXgwAmJXw=";
