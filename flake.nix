@@ -216,7 +216,7 @@
           IDS="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -G \
             --data-urlencode "path=/$NAME" \
             "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json" \
-            | grep -aoE '"id":"[0-9]+"' | grep -oE '[0-9]+')"
+            | grep -aoE '"id":"[0-9]+"' | grep -oE '[0-9]+' || true)"
           for i in $IDS; do
             curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -X DELETE \
               "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares/$i" >/dev/null 2>&1 || true
