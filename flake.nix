@@ -1071,6 +1071,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           'host' => '/run/redis-nc/redis.sock',
           'port' => 0,
         ];
+        // memories: live video transcode on + the go-vod callback to the
+        // instance's actual HTTP port (default localhost:80 doesn't serve).
+        // The bundled go-vod binary spawns per playback from bin-ext.
+        $CONFIG['memories.vod.disable'] = false;
+        $CONFIG['memories.vod.nc_url'] = 'http://127.0.0.1:55555';
         $CONFIG['trashbin_retention_obligation']  = 'disabled'; // trash persists until manually expunged
         $CONFIG['versions_retention_obligation']  = 'disabled'; // file versions persist until manually purged
         file_put_contents($configFile, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n");
