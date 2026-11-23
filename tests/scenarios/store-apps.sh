@@ -74,6 +74,10 @@ expect_equal 200 "$PREVIEW" "video preview generated (Movie provider via ffmpeg)
 ok "video previews work"
 
 step "app store install is idempotent on rerun"
-OUT="$(nix run .#deploy 2>&1 >/dev/null || true)"
-echo "$OUT" | grep -aq 'app:install music' || fail "storeApps loop missing from deploy"
-ok "deploy rerun keeps state (idempotent app:install+enable)"
+nix run .#deploy >/dev/null 2>&1 || fail "rerun deploy failed"
+for a in music files_archive memories; do
+  expect_equal 'yes' \
+    "$(OCC config:app:get "$a" enabled 2>/dev/null | head -1)" \
+    "$a still enabled after rerun"
+done
+ok "deploy rerun idempotent (apps survive)"
