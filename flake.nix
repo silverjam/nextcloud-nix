@@ -626,15 +626,15 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       # Names & paths (single source of truth for units, Caddyfile, scripts)
       # ------------------------------------------------------------------
       # Redis (nix-built): the distributed + locking memcache Memories wants.
-      # Cache-only (no persistence), loopback TCP + unix socket, dedicated
-      # dynamic user.
+      # Cache-only (no persistence), loopback TCP, dedicated dynamic user.
+      redisMaxmemory = "2gb";
       redisConf = pkgs.writeText "redis-nc.conf" ''
         bind 127.0.0.1
         port 6379
         protected-mode yes
         save ""
         appendonly no
-        maxmemory 512mb
+        maxmemory ${redisMaxmemory}
         maxmemory-policy allkeys-lru
       '';
       redisUnit = pkgs.writeText "nextcloud-redis.service" ''
