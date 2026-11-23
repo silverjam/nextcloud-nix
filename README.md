@@ -335,10 +335,35 @@ when done. **`zfs-disaster-mirror-remove` requires that stamp plus a typed
 mirror intentionally stays on the root SSD as the second copy until the import
 is verified.
 
+The interim bind's honest name ("Archive (Read only)") reflects its contract:
+deletes through it are view-level only (the physical file stays on the
+dataset — data-safe, and it reappears after the next scan); real cleanup
+(trash/versions/edit) arrives with the option-B copy, which uses native NC
+files. When the copy is verified and lived with, the frozen imports
+(`primary/archive` + `backup/archive`) retire via `nc-archive-retire`
+(import-complete + `CONFIRM=retire-archive`; ~1.15T reclaimed) — nothing
+automated invokes it, and replication skips the retired pairs from then on.
+
 Retention is space-driven end to end: NC trash and file versions never
 auto-expire (`*_retention_obligation = disabled`), and snapshot history on
 both pools is pruned only below a free-space floor (150 GiB primary, 100 GiB
 replica), never below the newest 48 sync snapshots.
+
+### ffmpeg and the music app
+
+`ffmpeg` is nix-built: the flake declares `ffmpeg = pkgs.ffmpeg`, the deploy
+resolves the store path and symlinks `ffmpeg` + `ffprobe` into
+`/usr/local/bin` (the FHS local-bin location), and the Nextcloud units' PATH
+carries `/usr/local/bin` - which is what lets the Music app auto-detect it
+for transcoding and metadata of non-native formats.
+
+The Music app installs from the NC app store (`app:install music` at deploy,
+idempotent; currently 3.3.1): platform versioning and code signatures are the
+store's job, and app upgrades happen via `app:upgrade`. Vendoring the app as
+a hash-pinned tarball was attempted and dropped: the music project's 3.x
+releases are store-only (the public GitHub releases stop at NC 32), and the
+store's platform feed is an internal appdata pipeline NC fetches itself, not
+a public URL the flake can pin.
 
 ## Maintenance cookbook
 

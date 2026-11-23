@@ -1177,14 +1177,13 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # cleanup: the brief /etc/nextcloud-bin experiment
         rm -f /etc/nextcloud-bin/ffmpeg /etc/nextcloud-bin/ffprobe 2>/dev/null || true
         rmdir /etc/nextcloud-bin 2>/dev/null || true
-        # the music app is vendored: versioned tarball pinned in the flake by
-        # hash, extracted into the store-apps path at deploy — app version
-        # upgrades are flake edits, never manual downloads
+        # the music app installs from the NC app store: platform versioning
+        # and code signatures are the store's job; the version follows the
+        # store's latest-compatible release at install time (upgrades happen
+        # via app:upgrade). Vendoring was dropped: the music project's 3.x
+        # tarballs are store-only (public GitHub releases cap at NC 32)
         install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
-        MUSIC_TGZ="$(nix build --no-link --print-out-paths .#music-app 2>/dev/null | tail -1)"
-        rm -rf ${ncStoreApps}/music
-        tar xzf "$MUSIC_TGZ" -C ${ncStoreApps}
-        chown -R ${ncUser}:${ncUser} ${ncStoreApps}/music
+        nix run .#occ -- app:install music 2>&1 | tail -1 || true
         nix run .#occ -- app:enable music 2>&1 | tail -1 || true
         systemctl restart nextcloud-fpm.service
 
@@ -2087,10 +2086,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         php = phpEnv;
         postgresql = pg;
         ffmpeg = pkgs.ffmpeg;
-        music-app = pkgs.fetchurl {
-          url = "https://github.com/nc-music/oc-music/releases/download/v2.6.2/music_2.6.2_for_owncloud.tar.gz";
-          hash = "sha256-SJY19GftLgQZou9Lghux+zDY1VxVxnRUSZbaAGg2Zx4=";
-        };
         caddyfile = caddyfile;
         default = deploy;
       };
