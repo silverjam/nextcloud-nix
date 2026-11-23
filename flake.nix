@@ -1772,6 +1772,18 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         PREV_NC="$(zfs list -t snapshot -o name -H -s creation ${zfsPoolPrimary}/nextcloud | tail -1 | cut -d@ -f2 || true)"
         PREV_AR="$(zfs list -t snapshot -o name -H -s creation ${zfsPoolPrimary}/archive | tail -1 | cut -d@ -f2 || true)"
         zfs snapshot ${zfsPoolPrimary}/nextcloud@$STAMP
+        # the archive pairs retire with nc-archive-retire — replicate skips
+        # them once gone
+        ARCHIVE_GONE=0
+        zfs list -H -o name ${archiveDataset} >/dev/null 2>&1 || ARCHIVE_GONE=1
+        PREV_AR=""
+        if [ "$ARCHIVE_GONE" = 1 ]; then
+          echo "replicate: archive datasets retired — replicating nextcloud only"
+        fi
+        if [ "$ARCHIVE_GONE" = 0 ]; then
+          PREV_AR="$(zfs list -t snapshot -o name -H -s creation ${archiveDataset} | tail -1 | cut -d@ -f2 || true)"
+          zfs snapshot ${archiveDataset}@$STAMP
+        fi
         zfs snapshot ${zfsPoolPrimary}/archive@$STAMP
         if [ -n "$PREV_NC" ]; then
           zfs send -I ${zfsPoolPrimary}/nextcloud@$PREV_NC ${zfsPoolPrimary}/nextcloud@$STAMP \
@@ -1779,11 +1791,13 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         else
           zfs send -R ${zfsPoolPrimary}/nextcloud@$STAMP | zfs receive -F -x mountpoint ${replicaDataset}
         fi
-        if [ -n "$PREV_AR" ]; then
-          zfs send -I ${zfsPoolPrimary}/archive@$PREV_AR ${zfsPoolPrimary}/archive@$STAMP \
-            | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
-        else
-          zfs send -R ${zfsPoolPrimary}/archive@$STAMP | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
+        if [ "$ARCHIVE_GONE" = 0 ]; then
+          if [ -n "$PREV_AR" ]; then
+            zfs send -I ${archiveDataset}@$PREV_AR ${archiveDataset}@$STAMP \
+              | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
+          else
+            zfs send -R ${archiveDataset}@$STAMP | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
+          fi
         fi
         date -u +"%Y-%m-%dT%H:%M:%SZ snap=$STAMP" > ${primaryMount}.last-replication
         KEEP=$(( ${zfsKeepSnapshots} ))
@@ -1802,9 +1816,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
               done
         }
         prune_oldest ${zfsPoolPrimary} ${primaryPruneMinFree} ${zfsPoolPrimary}/nextcloud
-        prune_oldest ${zfsPoolPrimary} ${primaryPruneMinFree} ${zfsPoolPrimary}/archive
-        prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${zfsPoolBackup}/nextcloud-data
-        prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${zfsPoolBackup}/archive
+        if [ "$ARCHIVE_GONE" = 0 ]; then
+          prune_oldest ${zfsPoolPrimary} ${primaryPruneMinFree} ${archiveDataset}
+          prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${zfsPoolBackup}/archive
+        fi
+        prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${replicaDataset}
         echo "replicate: done (snap $STAMP; retention: keep $KEEP, prune only below free-space floors)"
       '';
 
