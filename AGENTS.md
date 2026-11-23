@@ -38,6 +38,40 @@ verified against real failures during the ZFS migration (Nov 2026).
    write-tool-created file) over `docker cp` for remote scripts.
 7. **heredoc bodies are command text**: the `''`-stripping applies to the
    whole command string including heredoc bodies of the tool call.
+8. **Rapid successive pushes ghost-run CI**: a push while the previous run
+   is pending-without-jobs leaves the new run pending too (no jobs created),
+   and the older run is cancelled seconds after the newer one is created.
+   Workaround: after pushing, wait for the run to materialize jobs or
+   trigger an explicit `gh workflow run CI` dispatch; `gh run watch` in the
+   background for long matrices.
+
+## Nix indented-string (`''...''`) traps in flake recipes
+
+1. **A backslash is literal inside `''` strings** (unlike double-quoted nix
+   strings), and `'''` escapes to a single `'`. Consequence: a bash EOL line
+   continuation must be typed as ONE backslash at source; `\\` ships as two
+   backslashes, which bash reads as an escaped-backslash and the
+   continuation silently breaks (`find: paths must precede expression: '\'`).
+   This broke a `find \ -o ...` and an `ffmpeg ... \ -c:v` in the committed
+   transcode recipe.
+2. **A bare uppercase variable word is a command name, not a typo check**:
+   `FFPROBE -v quiet ...` runs a command named FFPROBE; with
+   `2>/dev/null | ... || true` the failure is masked and every file is
+   "skipped as playable". Found only by `bash -x` on the BUILT recipe (the
+   xtrace shows the substituted command line; the `$f` expansion looked
+   correct, the missing `$FFPROBE` did not).
+3. **`nix build --print-out-paths` output order varies per package**
+   (ffmpeg: bin first; postgresql: man first) - never pick an output with
+   head/tail-1. Select the output that has the binary:
+   `while read -r p; do [ -x "$p/bin/$tool" ] && ...`.
+4. **Validate recipe logic by running it, not reading it**: `bash -n` +
+   grep both passed on a recipe whose find-continuation was broken and
+   whose ffprobe call was a bare word. `bash -x <built-recipe>` and one
+   manual invocation against a planted fixture caught both.
+5. **Beware `| head -N` truncation while validating**: closing the pipe
+   SIGPIPEs the producer mid-run (a docker exec validation script died
+   silently partway through an ffmpeg convert). Filter with grep without
+   head, or write full output to a file when the producer must finish.
 
 ## Bash / shell traps in the recipes and tests
 
@@ -85,7 +119,15 @@ verified against real failures during the ZFS migration (Nov 2026).
 4. **Deleting shares/files that reference a vanished dataset** is done by
    NC's background maintenance automatically; a share can vanish from the DB
    minutes after creation - re-check state instead of assuming a UI bug.
-5. **App store distribution**: some apps (music 3.x) publish tarballs ONLY
+5. **DAV PROPFIND hrefs are URL-encoded** - the XML body contains
+   `Archive%202007-2026`, never the raw spaced name. assert greps must use
+   the encoded form (or a prefix); a raw-name grep fails instantly and
+   looks like a share/mount problem.
+6. **A recipient delete of a shared file makes TWO `oc_files_trash` rows**
+   (the owner's real entry + the recipient's restore-the-share entry), both
+   `deleted_by`-recipient, same timestamp. Asserting count=1 fails; assert
+   `deleted_by='user' AND id=<name>` count=2.
+7. **App store distribution**: some apps (music 3.x) publish tarballs ONLY
    through the appstore pipeline (no public URL to pin); per-app choice:
    vendored hash-pinned fetchurl when the author publishes public tarballs
    (files_archive pattern), store-driven `app:install`+`app:enable`
