@@ -223,6 +223,11 @@
           done
         fi
         echo "retire: destroying ${archiveDataset} and the replica pair"
+        # mounted datasets refuse destroy — unmount first (the /mnt/archive
+        # machine mount disappears with the dataset's own mountpoint)
+        zfs umount ${archiveDataset} 2>/dev/null || true
+        umount ${archiveSource} 2>/dev/null || true
+        zfs umount ${zfsPoolBackup}/archive 2>/dev/null || true
         zfs destroy -r ${archiveDataset} 2>/dev/null || true
         zfs destroy -r ${zfsPoolBackup}/archive 2>/dev/null || true
         touch ${migrationState}/archive-retired
