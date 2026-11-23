@@ -879,7 +879,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ProtectKernelTunables=true
         ProtectKernelModules=true
         ProtectControlGroups=true
-        RestrictAddressFamilies=AF_UNIX
+        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
         SystemCallArchitectures=native
 
         [Install]
@@ -913,7 +913,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ProtectKernelTunables=true
         ProtectKernelModules=true
         ProtectControlGroups=true
-        RestrictAddressFamilies=AF_UNIX
+        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
         SystemCallArchitectures=native
 
         [Install]
@@ -945,7 +945,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ProtectKernelTunables=true
         ProtectKernelModules=true
         ProtectControlGroups=true
-        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_INET AF_INET6
         SystemCallArchitectures=native
 
         [Install]
@@ -1708,7 +1708,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ProtectSystem=strict
         ProtectHome=true
         ReadWritePaths=${ncRoot} ${backupRoot}
-        RestrictAddressFamilies=AF_UNIX
+        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
       '';
 
       backupTimer = pkgs.writeText "nextcloud-backup.timer" ''
@@ -1744,7 +1744,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ProtectSystem=strict
         ProtectHome=true
         ReadWritePaths=${ncRoot} ${backupRoot}
-        RestrictAddressFamilies=AF_UNIX
+        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
       '';
 
       snapshotTimer = pkgs.writeText "nextcloud-snapshot.timer" ''
@@ -2137,7 +2137,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ProtectSystem=strict
         ProtectHome=true
         ReadWritePaths=${ncRoot} ${backupRoot}
-        RestrictAddressFamilies=AF_UNIX
+        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
       '';
 
       dataSyncService = pkgs.writeText "nextcloud-data-sync.service" ''
@@ -2156,7 +2156,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ProtectSystem=strict
         ProtectHome=true
         ReadWritePaths=${ncRoot} ${dataSyncTarget}
-        RestrictAddressFamilies=AF_UNIX
+        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
       '';
 
       dataSyncTimer = pkgs.writeText "nextcloud-data-sync.timer" ''
