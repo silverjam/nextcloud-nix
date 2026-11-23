@@ -1267,6 +1267,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         fi
 
         echo "== restarting to pick up the current build =="
+        systemctl restart nextcloud-redis.service
         systemctl restart nextcloud-db.service
         systemctl restart nextcloud-fpm.service
         systemctl restart nextcloud-caddy.service
