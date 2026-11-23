@@ -78,6 +78,9 @@ nc-archive-share:
 nc-archive-retire:
     nix run .#nc-archive-retire
 
+nc-transcode-unplayable:
+    nix run .#nc-transcode-unplayable
+
 # show the one-shot passwords generated for provisioned users (optional uid filter)
 provisioned-passwords uid="":
     nix run .#provisioned-passwords -- {{ uid }}

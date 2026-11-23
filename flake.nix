@@ -249,8 +249,8 @@
         [ -x "$FFMPEG" ] || { echo "ffmpeg missing in ncToolsEnv (deploy first)" >&2; exit 1; }
         echo "transcode: scanning $TDIR for undecodable video/audio codecs"
         N=0
-        find "$TDIR" -type f \\( -iname '*.mov' -o -iname '*.avi' -o -iname '*.wmv' \\
-          -o -iname '*.mkv' -o -iname '*.mpg' -o -iname '*.mpeg' -o -iname '*.mp4' \\) -print0 |
+        find "$TDIR" -type f \( -iname '*.mov' -o -iname '*.avi' -o -iname '*.wmv' \\
+          -o -iname '*.mkv' -o -iname '*.mpg' -o -iname '*.mpeg' -o -iname '*.mp4' \) -print0 |
         while IFS= read -r -d ''' f; do
           V="$(FFPROBE -v quiet -show_entries stream=codec_name,codec_type -of csv=p=0 "$f" 2>/dev/null | tr '\n' ' ' || true)"
           case "$V" in
@@ -2150,6 +2150,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         "nc-import-archive" = ncImportArchive;
         "nc-archive-share" = ncArchiveShare;
         "nc-archive-retire" = ncArchiveRetire;
+        "nc-transcode-unplayable" = ncTranscodeUnplayable;
         "zfs-check" = zfsCheck;
         "provisioned-passwords" = zfsProvisionedPasswords;
         nextcloud = nc;
@@ -2220,6 +2221,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
                 "${ncImportArchive}/bin/nc-import-archive" \
                 "${ncArchiveShare}/bin/nc-archive-share" \
                 "${ncArchiveRetire}/bin/nc-archive-retire" \
+                "${ncTranscodeUnplayable}/bin/nc-transcode-unplayable" \
                 "${zfsCheck}/bin/zfs-check" \
                 "${ncProvisionJob}/bin/nc-provision" \
                 "${zfsProvisionedPasswords}/bin/provisioned-passwords" \
