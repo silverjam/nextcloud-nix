@@ -407,25 +407,25 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       ncWebUrl = "http://127.0.0.1:${webPort}";
       # interim: the archive dataset binds INTO the datadir (zero copy) and is
       # served as a native shared folder; option B's copy replaces this later
-      archiveBindMountName = "Archive";
+      archiveBindMountName = "Archive (Read only)";
       archiveBindWhere = "${ncDataDir}/${archiveOwner}/files/${archiveBindMountName}";
-      archiveBindMountUnit = pkgs.writeText "var-lib-nextcloud-data-archive-files-Archive.mount" ''
+      archiveBindService = pkgs.writeText "nextcloud-archive-bind.service" ''
         [Unit]
-        Description=Nextcloud archive dataset bind-mounted into the datadir (interim)
+        Description=Nextcloud archive dataset bind-mounted into the datadir (interim, read-only in practice)
         ConditionPathIsDirectory=${archiveSource}
         # the bind lands INSIDE the archive user's home — the account must
         # exist first (its creation refuses when the home already holds files)
         # Requires pulls init AND provision into the transaction (After only
         # orders — without the pull, provision spawned before init created
-        # ncRoot and died at namespace setup); the account must exist before
-        # its home holds files
+        # ncRoot and died at namespace setup)
         Requires=nextcloud-init.service nextcloud-provision.service
         After=nextcloud-init.service nextcloud-provision.service
-        [Mount]
-        What=${archiveSource}
-        Where=${archiveBindWhere}
-        Type=none
-        Options=bind
+        [Service]
+        Type=oneshot
+        RemainAfterExit=true
+        ExecStartPre=/usr/bin/install -d -o ${ncUser} -g ${ncUser} -m 0770 "${archiveBindWhere}"
+        ExecStart=/usr/bin/mount --bind "${archiveSource}" "${archiveBindWhere}"
+        ExecStop=/usr/bin/umount "${archiveBindWhere}"
         [Install]
         WantedBy=multi-user.target
       '';
@@ -1071,7 +1071,15 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         install -m 0644 ${dataSyncService} ${unitDir}/nextcloud-data-sync.service
         install -m 0644 ${dataSyncTimer} ${unitDir}/nextcloud-data-sync.timer
         install -m 0644 ${provisionService} ${unitDir}/nextcloud-provision.service
-        install -m 0644 ${archiveBindMountUnit} ${unitDir}/var-lib-nextcloud-data-archive-files-Archive.mount
+        install -m 0644 ${archiveBindService} ${unitDir}/nextcloud-archive-bind.service
+        # retire the pre-rename .mount unit (idempotent; safe on fresh hosts)
+        systemctl disable --now var-lib-nextcloud-data-archive-files-Archive.mount 2>/dev/null || true
+        if findmnt -no SOURCE "${ncDataDir}/${archiveOwner}/files/Archive" >/dev/null 2>&1; then
+          umount "${ncDataDir}/${archiveOwner}/files/Archive" 2>/dev/null || true
+        fi
+        if ! findmnt -no SOURCE "${ncDataDir}/${archiveOwner}/files/Archive" >/dev/null 2>&1; then
+          rm -rf "${ncDataDir}/${archiveOwner}/files/Archive" 2>/dev/null || true
+        fi
 
         echo "== backup roots =="
         install -d -o ${ncUser} -g ${ncUser} -m 0700 \
@@ -1086,7 +1094,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         systemctl daemon-reload
         echo "== enabling services =="
         systemctl enable --now \
-          var-lib-nextcloud-data-archive-files-Archive.mount \
+          nextcloud-archive-bind.service \
           nextcloud-db.service \
           nextcloud-fpm.service \
           nextcloud-caddy.service \

@@ -28,7 +28,7 @@ nix run .#occ -- user:info archive >/dev/null 2>&1 || {
   OC_PASS=external-test-password nix run .#occ -- user:add archive --password-from-env >/dev/null
 }
 nix run .#occ -- group:adduser parents archive >/dev/null 2>&1 || true
-findmnt -no SOURCE /var/lib/nextcloud/data/archive/files/Archive | grep -aq /var/ext-archive \
+findmnt -no SOURCE "/var/lib/nextcloud/data/archive/files/Archive (Read only)" | grep -aq /var/ext-archive \
   || fail "bind unit did not mount the planted source"
 ok "bind unit mounted /var/ext-archive into the datadir"
 
@@ -52,7 +52,7 @@ expect_equal 1 \
 curl -sS -u "jason:$PW" -X PROPFIND -H 'Depth: 1' "$BASE_URL/remote.php/dav/files/jason/" \
   | grep -aq 'Archive' || fail "jason does not see the bound archive folder"
 CODE="$(curl -sS -o /dev/null -w '%{http_code}' -u "jason:$PW" \
-  -X DELETE "$BASE_URL/remote.php/dav/files/jason/Archive/family/file.txt")"
+  -X DELETE "$BASE_URL/remote.php/dav/files/jason/Archive%20%28Read%20only%29/family/file.txt")"
 ok "delete-through-bind answered ($CODE: interim view-level no-op, data-safe)"
 
 step "share: rerun is idempotent"
