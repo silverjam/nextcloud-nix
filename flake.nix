@@ -234,6 +234,43 @@
         echo "retire: done — replication skips the archive datasets from now on; space reclaimed as the pools free lazily"
       '';
 
+      ncTranscodeUnplayable = pkgs.writeShellScriptBin "nc-transcode-unplayable" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        # gates: the option-B copy must exist and be complete
+        test -f ${migrationState}/import-complete \
+          || { echo "refusing: import-complete missing (nc-import-archive first)" >&2; exit 1; }
+        STATE="$(cat ${migrationState}/import-share-name 2>/dev/null || true)"
+        [ -n "$STATE" ] || { echo "import-share-name stamp missing" >&2; exit 1; }
+        TDIR="${ncDataDir}/${archiveOwner}/files/$STATE"
+        [ -d "$TDIR" ] || { echo "import tree $TDIR missing" >&2; exit 1; }
+        FFMPEG=${ncToolsEnv}/bin/ffmpeg
+        FFPROBE=${ncToolsEnv}/bin/ffprobe
+        [ -x "$FFMPEG" ] || { echo "ffmpeg missing in ncToolsEnv (deploy first)" >&2; exit 1; }
+        echo "transcode: scanning $TDIR for undecodable video/audio codecs"
+        N=0
+        find "$TDIR" -type f \\( -iname '*.mov' -o -iname '*.avi' -o -iname '*.wmv' \\
+          -o -iname '*.mkv' -o -iname '*.mpg' -o -iname '*.mpeg' -o -iname '*.mp4' \\) -print0 |
+        while IFS= read -r -d ''' f; do
+          V="$(FFPROBE -v quiet -show_entries stream=codec_name,codec_type -of csv=p=0 "$f" 2>/dev/null | tr '\n' ' ' || true)"
+          case "$V" in
+            *mjpeg*|*h263*|*mpeg4*|*dvvideo*|*msvideo*|*wmv1*|*wmv2*|*wmav2*|*pcm_*|*gsm*|*adpcm*)
+              : # needs conversion
+              ;;
+            *) continue ;;
+          esac
+          OUT="''${f%.*}.mp4"          # same basename => converts in place for mp4 sources
+          TMP="$OUT.part"
+          echo "transcode: $f"
+          "$FFMPEG" -hide_banner -loglevel warning -y -i "$f" \\
+            -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \\
+            -c:a aac -b:a 128k -movflags +faststart "$TMP"
+          mv -f "$TMP" "$OUT"
+          N=$((N + 1))
+        done
+        echo "transcode: done ($N files converted to h264/aac)"
+      '';
+
       ncImportArchive = pkgs.writeShellScriptBin "nc-import-archive" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
