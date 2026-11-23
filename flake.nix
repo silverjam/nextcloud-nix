@@ -744,6 +744,16 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           redir /.well-known/carddav /remote.php/dav 301
           redir /.well-known/caldav /remote.php/dav 301
 
+          # store-apps apps' static assets (the apps_paths url: /store-apps)
+          # block the dirs that hold executable PHP / build sources
+          @sa-protected path /store-apps/*/lib/* /store-apps/*/vendor-scoped/* /store-apps/*/composer/* /store-apps/*/appinfo/signature.json
+          respond @sa-protected 404
+
+          handle /store-apps/* {
+            root /var/lib/nextcloud
+            file_server
+          }
+
           php_fastcgi unix/${fpmSock} {
             env front_controller_active true
           }
