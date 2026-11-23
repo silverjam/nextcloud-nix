@@ -1786,7 +1786,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           PREV_AR="$(zfs list -t snapshot -o name -H -s creation ${archiveDataset} | tail -1 | cut -d@ -f2 || true)"
           zfs snapshot ${archiveDataset}@$STAMP
         fi
-        zfs snapshot ${zfsPoolPrimary}/archive@$STAMP
         if [ -n "$PREV_NC" ]; then
           zfs send -I ${zfsPoolPrimary}/nextcloud@$PREV_NC ${zfsPoolPrimary}/nextcloud@$STAMP \
             | zfs receive -F -x mountpoint ${replicaDataset}
