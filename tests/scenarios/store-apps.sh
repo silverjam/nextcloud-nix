@@ -60,6 +60,7 @@ ok "transcode + preview provider config present"
 step "previews: movie provider generates a video thumb"
 export OC_PASS=archive-test-password
 OCC user:add tuser --password-from-env >/dev/null 2>&1 || true
+install -d -o nextcloud -g nextcloud -m 0700 /var/lib/nextcloud/data/tuser/files
 /usr/bin/sudo -u nextcloud env HOME=/var/lib/nextcloud NEXTCLOUD_CONFIG_DIR=/var/lib/nextcloud/config \
   "$FF" -hide_banner -loglevel error -y \
   -f lavfi -i "testsrc=size=320x240:rate=10" -t 2 \
