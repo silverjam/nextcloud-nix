@@ -861,7 +861,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         RemainAfterExit=true
         TimeoutStartSec=15min
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         StateDirectory=nextcloud
         ExecStart=${initScript}
 
@@ -881,7 +881,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${phpEnv}/bin/php ${nc}/occ background:cron
       '';
 
@@ -1167,12 +1167,16 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         systemctl restart nextcloud-provision.service
 
         echo "== ffmpeg (nix) + music app =="
-        # nix-built ffmpeg lands on a stable dir that carries the fpm PATH; the
-        # store path is resolved at deploy time so versions follow the flake
-        install -d -m 0755 /etc/nextcloud-bin
+        # nix-built ffmpeg lands on the FHS standard local-bin path; the store
+        # path is resolved at deploy time so versions follow the flake. The
+        # units' PATH carries /usr/local/bin, which is what lets the music app
+        # (and anything else site-local) find these.
         FFBIN="$(nix build --no-link --print-out-paths .#ffmpeg 2>/dev/null | tail -1)"
-        ln -sfn "$FFBIN/bin/ffmpeg" /etc/nextcloud-bin/ffmpeg
-        ln -sfn "$FFBIN/bin/ffprobe" /etc/nextcloud-bin/ffprobe
+        ln -sfn "$FFBIN/bin/ffmpeg" /usr/local/bin/ffmpeg
+        ln -sfn "$FFBIN/bin/ffprobe" /usr/local/bin/ffprobe
+        # cleanup: the brief /etc/nextcloud-bin experiment
+        rm -f /etc/nextcloud-bin/ffmpeg /etc/nextcloud-bin/ffprobe 2>/dev/null || true
+        rmdir /etc/nextcloud-bin 2>/dev/null || true
         # the music app is vendored: versioned tarball pinned in the flake by
         # hash, extracted into the store-apps path at deploy — app version
         # upgrades are flake edits, never manual downloads
@@ -1582,7 +1586,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${ncBackupJob}/bin/nc-backup full
         TimeoutStartSec=4h
         NoNewPrivileges=true
@@ -1618,7 +1622,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${ncBackupJob}/bin/nc-backup incremental
         TimeoutStartSec=2h
         NoNewPrivileges=true
@@ -2011,7 +2015,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${ncProvisionJob}/bin/nc-provision
         TimeoutStartSec=10min
         NoNewPrivileges=true
@@ -2031,7 +2035,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         User=${ncUser}
         Group=${ncUser}
         UMask=0077
-        Environment="PATH=/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         ExecStart=${ncDataSyncJob}/bin/nc-data-sync
         TimeoutStartSec=4h
         NoNewPrivileges=true
