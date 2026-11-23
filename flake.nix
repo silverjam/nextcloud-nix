@@ -260,25 +260,32 @@
           | sed -E 's/^uid=[^ ]+ password=([^ ]+).*/\1/' | tail -1 || true)"
         [ -n "$PW" ] \
           || { echo "no credentials for ${archiveOwner} on file — share by hand or re-provision" >&2; exit 1; }
-        EXIST="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -G \
+        MEMBERS="$(OCC group:list --output=json 2>/dev/null | python3 -c "import json,sys
+print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
+        [ -n "$MEMBERS" ] \
+          || { echo "group ${archiveShareGroup} empty or missing — nothing to share with" >&2; exit 1; }
+        HELD="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' -G \
           --data-urlencode "path=/$NAME" \
           "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json" \
-          | grep -aoE '"share_with":"${archiveShareGroup}"' | wc -l || true)"
-        if [ "$EXIST" -ge 1 ]; then
-          echo "archive: ${archiveShareGroup} share already present"
-        else
+          | grep -aoE '"share_with":"[a-z0-9_.@-]+"' || true)"
+        for m in $MEMBERS; do
+          [ "$m" = "${archiveOwner}" ] && continue
+          case "$HELD" in
+            *'"share_with":"'"$m"'"'*) continue ;;
+          esac
           RESP="$(curl -sS -u "${archiveOwner}:$PW" -H 'OCS-APIRequest: true' \
             --data-urlencode "path=/$NAME" \
-            --data-urlencode "shareType=3" \
-            --data-urlencode "shareWith=${archiveShareGroup}" \
+            --data-urlencode "shareType=0" \
+            --data-urlencode "shareWith=$m" \
             --data-urlencode "permissions=${archiveSharePerms}" \
             "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares?format=json")"
           echo "$RESP" | grep -aq '"statuscode":200' \
-            || { echo "share creation failed: $RESP" >&2; exit 1; }
-        fi
+            || { echo "share with member $m failed: $RESP" >&2; exit 1; }
+          echo "archive: shared '$NAME' with member $m"
+        done
 
         touch ${migrationState}/import-complete
-        echo "archive: import complete — '$NAME' shared with ${archiveShareGroup}"
+        echo "archive: import complete — '$NAME' shared with ${archiveShareGroup} members"
       '';
 
       ncArchiveShare = pkgs.writeShellScriptBin "nc-archive-share" ''
