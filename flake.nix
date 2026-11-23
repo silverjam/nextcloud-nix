@@ -490,8 +490,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       ncWebUrl = "http://127.0.0.1:${webPort}";
       # NC store apps the deploy installs + enables; add an app here and a
       # deploy brings it in (the store resolves the platform-compatible
-      # version, NC 34 currently -> files_archive 1.3.2)
-      storeApps = [ "music" ];
+      # version; NC 34 -> music 3.3.1, files_archive 1.3.2, memories current)
+      storeApps = [ "music" "files_archive" "memories" ];
       storeAppsJoined = lib.concatStringsSep " " storeApps;
       # the archive manager app is vendored: the author's release tarball,
       # hash-pinned here (declared NC 33-35, so NC 34 is in range) and
