@@ -797,7 +797,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Group=${ncUser}
         UMask=0077
         Environment="NEXTCLOUD_CONFIG_DIR=${ncConfig}"
-        Environment="PATH=/etc/nextcloud-bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        Environment="PATH=/run/current-system/sw/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         RuntimeDirectory=nextcloud
         RuntimeDirectoryMode=0755
         StateDirectory=nextcloud
@@ -1179,9 +1179,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         FFBIN="$(nix build --no-link --print-out-paths .#ffmpeg 2>/dev/null | tail -1)"
         ln -sfn "$FFBIN/bin/ffmpeg" /usr/local/bin/ffmpeg
         ln -sfn "$FFBIN/bin/ffprobe" /usr/local/bin/ffprobe
-        # cleanup: the brief /etc/nextcloud-bin experiment
-        rm -f /etc/nextcloud-bin/ffmpeg /etc/nextcloud-bin/ffprobe 2>/dev/null || true
-        rmdir /etc/nextcloud-bin 2>/dev/null || true
         # store apps: the flake's storeApps list declares which apps are
         # wanted; the NC app store handles platform versioning + signatures
         # (app:install + app:enable are both idempotent; app versions follow
