@@ -123,6 +123,8 @@ ok "prune clamped to floor ($N snapshots)"
 
 step "retirement: gated destroy of the archive datasets (replicate adapts)"
 MS=/var/backups/nextcloud/migration-state
+mkdir -p "$MS"
+touch "$MS/migration-complete"
 ERR="$(nix run .#nc-archive-retire 2>&1 >/dev/null || true)"
 echo "$ERR" | grep -aq 'import-complete' \
   || fail "retire did not require import-complete (got: $ERR)"
