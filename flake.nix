@@ -339,17 +339,37 @@
         OCC user:info ${archiveOwner} >/dev/null \
           || { echo "user ${archiveOwner} not provisioned (add to provisionedUsers, deploy)" >&2; exit 1; }
 
-        # share name: oldest file year in the source; stamped once, never renamed
+        # share name: the archive's own span — oldest..newest file year in the
+        # source — stamped once and never renamed. Deriving the END year from
+        # the newest file rather than "now" keeps the name stable across years
+        # (and matches what a hand-curated span looks like).
         STATE="${migrationState}/import-share-name"
         if [ -s "$STATE" ]; then
           NAME="$(cat "$STATE")"
         else
-          OLD="$(find "${archiveSource}" -type f -printf '%T+\n' 2>/dev/null | sort | head -1 | cut -d- -f1)"
-          case "$OLD" in
-            1[89][0-9][0-9]|20[0-9][0-9]) ;;
-            *) OLD="$(date +%Y)" ;;
-          esac
-          NAME="Archive $OLD-$(date +%Y)"
+          YEARS="$(find "${archiveSource}" -type f -printf '%T+\n' 2>/dev/null \
+            | cut -d- -f1 | grep -E '^(19|20)[0-9][0-9]$' | sort -u || true)"
+          OLD="$(printf '%s\n' "$YEARS" | head -1 || true)"
+          NEW="$(printf '%s\n' "$YEARS" | tail -1 || true)"
+          [ -n "$OLD" ] || OLD="$(date +%Y)"
+          [ -n "$NEW" ] || NEW="$(date +%Y)"
+          NAME="Archive $OLD-$NEW"
+          # never copy twice: if a tree already exists under another
+          # Archive <y>-<y> name, adopt it instead of computing a new one
+          # (the exact pattern keeps the interim bind "Archive (Read only)"
+          # out of the match)
+          FILES="${ncDataDir}/${archiveOwner}/files"
+          EXISTING="$(find "$FILES" -maxdepth 1 -mindepth 1 -type d \
+            -name 'Archive [0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9]' \
+            -printf '%f\n' 2>/dev/null || true)"
+          if [ -n "$EXISTING" ] && ! printf '%s\n' "$EXISTING" | grep -qxF "$NAME"; then
+            NEX="$(printf '%s\n' "$EXISTING" | grep -c . || true)"
+            [ "$NEX" = 1 ] || { echo "refusing: ''${NEX} archive folders exist and none is '$NAME':" >&2
+                               printf '  %s\n' "$EXISTING" >&2
+                               echo "write ''${STATE} by hand to pick one, then rerun" >&2; exit 1; }
+            echo "archive: adopting existing folder '$EXISTING' (not '$NAME')"
+            NAME="$EXISTING"
+          fi
           printf %s "$NAME" > "$STATE"
         fi
         TDIR="${ncDataDir}/${archiveOwner}/files/$NAME"

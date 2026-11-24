@@ -328,8 +328,9 @@ real cleanup (trash/versions/edit) comes with the option-B copy below, which
 uses native NC files. Delete-through-UI moves files into trash (retention
 disabled — nothing auto-expires) with the dataset copy untouched. **Long term (option B):
 `just nc-import-archive`** copies the archive dataset into the folder of
-service user `archive` as `Archive <year>-<year>` (name stamped once from the
-oldest file on disk), scans it and shares the same way; resumable (count
+service user `archive` as `Archive <first>-<last>` (the span of the files on
+disk — stamped once, and an existing `Archive <y>-<y>` tree is adopted rather
+than re-copied), scans it and shares the same way; resumable (count
 stamp + 250-file spot check), stamps `import-complete` when done — after
 which the interim bind and its share can be retired. The recipe is
 resumable (count stamp + 250-file spot check) and stamps `import-complete`

@@ -38,15 +38,18 @@ export PATH=/nix/var/nix/profiles/default/bin:/run/current-system/sw/bin:/usr/lo
 FF=$(nix build --no-link --print-out-paths .#ffmpeg | head -1)/bin/ffmpeg
 [ -x "$FF" ] || fail "ffmpeg missing after nix build"
 "$FF" -hide_banner -loglevel error -y -f lavfi -i "testsrc=size=320x240:rate=10" -t 2 -c:v mjpeg -pix_fmt yuvj422p "$SRC/videos/legacy-cam.mov"
+# pin the newest mtime: the folder name is the span of the files on disk, so a
+# "now" mtime would make the expected name drift with the calendar
+touch -d '2024-06-01 12:00' "$SRC/2024/newer.txt" "$SRC/top.txt" "$SRC/videos/legacy-cam.mov"
 sed -i 's|archiveSource = ".*";|archiveSource = "/var/archives-src";|' /test/flake.nix
 
 step "import: run the real recipe"
 nix run .#nc-import-archive
 
 expect_equal 1 \
-  "$(test -f '/var/lib/nextcloud/data/archive/files/Archive 2007-2026/2007/oldest.txt' && echo 1)" \
-  "folder named from the oldest file (Archive 2007-2026)"
-[ "$(find '/var/lib/nextcloud/data/archive/files/Archive 2007-2026' -type f | wc -l)" -eq 4 ] \
+  "$(test -f '/var/lib/nextcloud/data/archive/files/Archive 2007-2024/2007/oldest.txt' && echo 1)" \
+  "folder named from the file span on disk (Archive 2007-2024)"
+[ "$(find '/var/lib/nextcloud/data/archive/files/Archive 2007-2024' -type f | wc -l)" -eq 4 ] \
   || fail "expected 4 imported files (3 txt + the synthetic mjpeg mov)"
 grep -aF "'trashbin_retention_obligation' => 'disabled'" /var/lib/nextcloud/config/config.php >/dev/null \
   || fail "trashbin retention not disabled in config.php"
@@ -68,12 +71,12 @@ PW="$(grep -ah '^uid=jason password=' /var/lib/nextcloud/provision-credentials-*
 expect_equal 2 \
   "$(Q "SELECT count(*) FROM oc_share WHERE share_type=0 AND permissions=15 AND share_with IN ('jason','josphine')")" \
   "one type-0 user-share per member (NC 34 drops type-3 group recipients)"
-# DAV hrefs are URL-encoded (Archive%202007-2026): grep the encoded form. The
+# DAV hrefs are URL-encoded (Archive%202007-2024): grep the encoded form. The
 # recipient-side mount can also lag just-created shares — retry either way.
 vis=""
 for a in 1 2 3 4 5 6 7 8; do
   curl -sS -u "jason:$PW" -X PROPFIND -H 'Depth: 1' "$BASE_URL/remote.php/dav/files/jason/" \
-    | grep -aq 'Archive%202007-2026' && vis=1 && break
+    | grep -aq 'Archive%202007-2024' && vis=1 && break
   sleep 4
 done
 [ -n "$vis" ] || fail "jason does not see the shared folder (mount never resolved)"
@@ -84,7 +87,7 @@ step "retention: a member's delete lands in trash and stays"
 CODE=000
 for a in 1 2 3 4 5 6; do
   CODE="$(curl -sS -o /dev/null -w '%{http_code}' -u "jason:$PW" \
-    -X DELETE "$BASE_URL/remote.php/dav/files/jason/Archive%202007-2026/top.txt")"
+    -X DELETE "$BASE_URL/remote.php/dav/files/jason/Archive%202007-2024/top.txt")"
   [ "$CODE" = 204 ] && break
   sleep 3
 done
@@ -105,7 +108,7 @@ NC=$(nix eval --raw .#packages.x86_64-linux.nextcloud.outPath 2>/dev/null)
 PHP=$(nix eval --raw .#packages.x86_64-linux.php.outPath 2>/dev/null)
 OCC2() { sudo -u nextcloud env HOME=/var/lib/nextcloud NEXTCLOUD_CONFIG_DIR=/var/lib/nextcloud/config "$PHP/bin/php" "$NC/occ" "$@"; }
 nix run .#nc-transcode-unplayable >/dev/null
-CONV="/var/lib/nextcloud/data/archive/files/Archive 2007-2026/videos/legacy-cam.mp4"
+CONV="/var/lib/nextcloud/data/archive/files/Archive 2007-2024/videos/legacy-cam.mp4"
 test -f "$CONV" || fail "transcoded sibling mp4 missing"
 FP="$(dirname "$FF")/ffprobe"
 C=$("$FP" -v quiet -show_entries stream=codec_name,codec_type -of csv=p=0 "$CONV" 2>/dev/null | head -1)
@@ -120,3 +123,18 @@ echo "$ERR" | grep -aq 'CONFIRM' || fail "mirror-remove ran without CONFIRM"
 CONFIRM=disaster nix run .#zfs-disaster-mirror-remove >/dev/null
 [ ! -e /var/backups/disaster-mirror-sdc1 ] || fail "mirror still present after removal"
 ok "mirror-remove unlock order verified"
+
+step "import: a lost stamp adopts the existing tree (never a second copy)"
+mv "/var/lib/nextcloud/data/archive/files/Archive 2007-2024" \
+   "/var/lib/nextcloud/data/archive/files/Archive 1999-2000"
+rm -f "$MS/import-share-name"
+OUT="$(nix run .#nc-import-archive 2>&1 || true)"
+echo "$OUT" | grep -aq "adopting existing folder 'Archive 1999-2000'" \
+  || fail "did not adopt the existing folder (got: $OUT)"
+expect_equal "Archive 1999-2000" "$(cat "$MS/import-share-name")" \
+  "stamp rewritten from the adopted folder"
+expect_equal 1 \
+  "$(find /var/lib/nextcloud/data/archive/files -maxdepth 1 -mindepth 1 -type d \
+      -name 'Archive [0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9]' | wc -l)" \
+  "exactly one archive tree (no second copy)"
+ok "a lost stamp adopts the existing tree instead of re-copying"
