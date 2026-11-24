@@ -20,7 +20,7 @@ flake.nix ──nix build──▶ /nix/store/…-nextcloud-34.0.6   (webroot, i
             ─▶ nextcloud-init (oneshot: db, install, config.php)
             ─▶ nextcloud-cron.timer (background jobs every 5 min)
             ─▶ nextcloud-snapshot.timer (hourly restic db/app-state snapshot)
-            ─▶ nextcloud-sync.timer (hourly Sanoid GFS snapshots + Syncoid replica)
+            ─▶ nextcloud-sync.timer (hourly Sanoid GFS (data) + Syncoid (data/restic))
 ```
 
 ## Data locations
@@ -378,16 +378,19 @@ Retention is time-based end to end. Nextcloud keeps deleted files in the
 trash for at least 30 days and removes them after 30
 (`trashbin_retention_obligation = '30, 30'`); file versions are kept for at
 least 30 days and removed after 90 (`versions_retention_obligation = '30, 90'`).
-ZFS snapshots follow Sanoid's GFS policy: 24 hourly, 7 daily, 4 weekly and 3
-monthly snapshots per dataset (`primary/nextcloud` and `primary/restic`).
-Sanoid takes a separate snapshot for each tier (daily at 23:59, weekly on
-Monday, monthly on the 1st) and prunes each tier to its count; it does not
-literally promote the oldest hourly into the next tier, but the retained set
-has the same GFS shape. It runs on the hourly `nextcloud-sync.timer`; Syncoid
-mirrors every snapshot created after the replica's base (the phase-3 seed)
-and deletes target-only snapshots. Snapshots older than that base are not
-backfilled; on a host seeded before the Sanoid policy starts, every Sanoid
-snapshot created afterwards is present on both pools.
+ZFS snapshots of the user-file datadir follow Sanoid's GFS policy: 24 hourly,
+7 daily, 4 weekly and 3 monthly snapshots of `primary/nextcloud`. Sanoid takes
+a separate snapshot for each tier (daily at 23:59, weekly on Monday, monthly
+on the 1st) and prunes each tier to its count; it does not literally promote
+the oldest hourly into the next tier, but the retained set has the same GFS
+shape. It runs on the hourly `nextcloud-sync.timer`; Syncoid mirrors every
+snapshot created after the replica's base (the phase-3 seed) and deletes
+target-only snapshots. Snapshots older than that base are not backfilled; on a
+host seeded before the Sanoid policy starts, every Sanoid snapshot created
+afterwards is present on both pools. The restic repo is deliberately not
+GFS-snapshotted: restic already keeps its own hourly/daily history inside the
+repo. Syncoid still replicates the repo to `backup/restic` hourly using its
+own rolling `syncoid_*` snapshot.
 
 ### ffmpeg and the music app
 
@@ -560,9 +563,10 @@ onto a fresh instance.
 **User file data (`/var/lib/nextcloud/data`) is deliberately NOT in these
 archives.** It is protected by ZFS instead: the datadir lives on the
 `primary/nextcloud` dataset; Sanoid takes the GFS snapshots and Syncoid mirrors
-them (plus the restic repo) to the backup pool — whole-dataset rollback plus a
-second copy, but no application-level history. `nextcloud-sync.timer` runs this
-hourly, and `just sync-data` runs it now. See "Storage: migrating to ZFS". (The
+them to the backup pool — whole-dataset rollback plus a second copy, but no
+application-level history. The restic repo is replicated hourly as well, using
+Syncoid's own rolling sync snapshot. `nextcloud-sync.timer` runs both hourly,
+and `just sync-data` runs them now. See "Storage: migrating to ZFS". (The
 old hourly `rsync` data mirror was retired: it duplicated the file tree onto
 the root SSD and added nothing the ZFS replica and Nextcloud's own
 trash/versions already cover. `nix run .#deploy` tears down its units;
@@ -577,7 +581,8 @@ recipe — `CONFIRM=mirror`, and only after the `migration-complete` stamp.)
   changed DB blocks get stored); a true WAL-archiving/PITR setup is the
   follow-up if you need minute-level DB recovery.
 - **ZFS snapshots + replication** (`nextcloud-sync.timer`, hourly): Sanoid
-  takes the GFS tiers and Syncoid mirrors them to the backup pool.
+  takes the datadir GFS tiers; Syncoid mirrors the datadir and the restic repo
+  (with a rolling sync snapshot) to the backup pool.
 - Restic retention (in flake.nix): hourly ×24, daily ×14, weekly ×6, monthly ×6.
 - Repo: on the **ZFS `primary` pool**, dataset `primary/restic` mounted at
   `/var/backups/restic` (repo in `.../repo`, passphrase in `.../.restic-pass`,

@@ -596,11 +596,14 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       replicaDataset = "${zfsPoolBackup}/nextcloud-data";
       replicaMount = "/var/backups/zfs-replica";
       arcMax = "8589934592"; # 8G of 30G RAM
-      # GFS snapshot policy (Sanoid). One snapshot per period, so the counts
-      # are also the time windows: 24h of hourlies, 7d dailies, 4w weeklies,
-      # 3 months of monthlies. Sanoid takes the tier snapshots itself and
-      # prunes each tier to its count (it does not promote one tier into the
-      # next); Syncoid mirrors the resulting set to the backup pool.
+      # GFS snapshot policy (Sanoid) for the Nextcloud datadir. One snapshot
+      # per period, so the counts are also the time windows: 24h of hourlies,
+      # 7d dailies, 4w weeklies, 3 months of monthlies. Sanoid takes the tier
+      # snapshots itself and prunes each tier to its count (it does not
+      # promote one tier into the next); Syncoid mirrors the resulting set to
+      # the backup pool. The restic repo is not GFS-snapshotted: restic
+      # already keeps its own hourly/daily history, so Syncoid uses a rolling
+      # sync snapshot for that dataset instead.
       zfsKeepHourly = "24";
       zfsKeepDaily = "7";
       zfsKeepWeekly = "4";
@@ -617,9 +620,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
             autoprune = yes
 
         [${zfsPoolPrimary}/nextcloud]
-            use_template = gfs
-
-        [${resticDataset}]
             use_template = gfs
       '';
       # archive import (plan of record): copy the archive dataset into a
@@ -2084,17 +2084,20 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           exit 1
         fi
 
-        # Syncoid uses only the snapshots Sanoid just made (--no-sync-snap),
-        # keeps the replica's snapshot set identical to the source
-        # (--delete-target-snapshots), and must not inherit the source's
-        # mountpoint (the replica is mounted under ${replicaMount}).
+        # The nextcloud datadir uses only the snapshots Sanoid just made
+        # (--no-sync-snap), keeps the replica's snapshot set identical to the
+        # source (--delete-target-snapshots), and must not inherit the
+        # source's mountpoint (the replica is mounted under ${replicaMount}).
         RC=0
         ${pkgs.sanoid}/bin/syncoid --no-sync-snap --delete-target-snapshots \
           --recvoptions="x mountpoint" \
           ${zfsPoolPrimary}/nextcloud ${replicaDataset} || RC=1
 
         if zfs list -H -o name ${resticDataset} >/dev/null 2>&1; then
-          ${pkgs.sanoid}/bin/syncoid --no-sync-snap --delete-target-snapshots \
+          # restic already versions its repo inside the dataset; let Syncoid
+          # create/recycle its own syncoid_* snapshot rather than adding a
+          # second GFS history of the same backup catalog.
+          ${pkgs.sanoid}/bin/syncoid --delete-target-snapshots \
             --recvoptions="x mountpoint" \
             ${resticDataset} ${resticReplica} || RC=1
         fi
@@ -2301,7 +2304,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         zpool status -v 2>/dev/null | head -24 || true
         echo "== datasets =="
         zfs list 2>/dev/null || true
-        echo "== snapshot policy (Sanoid GFS) =="
+        echo "== snapshot policy (Sanoid GFS, nextcloud) =="
         echo "hourly=${zfsKeepHourly} daily=${zfsKeepDaily} weekly=${zfsKeepWeekly} monthly=${zfsKeepMonthly}"
         echo "== snapshots (last 12) =="
         zfs list -t snapshot -o name,creation -s creation 2>/dev/null | tail -12 || true
