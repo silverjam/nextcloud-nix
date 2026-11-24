@@ -155,5 +155,10 @@ verified against real failures during the ZFS migration (Nov 2026).
    the env-wrapped occ.
 3. **Retire/destroy flows** carry a stamped precondition chain
    (`migration-complete` -> `import-complete` -> `archive-retired`) and a
-   typed `CONFIRM=...` gate; nothing destructive is automated, and
-   recipes umount before `zfs destroy`.
+   typed `CONFIRM=...` gate that is **dry-run by default**: without the
+   CONFIRM the recipe prints the plan (stdout) plus one
+   `DRY RUN — nothing was changed. Set CONFIRM=<word> to proceed.` line on
+   stderr, and exits 0 having touched nothing. The stderr line is deliberate —
+   the scenarios capture stderr (`2>&1 >/dev/null`) and grep it for
+   `CONFIRM`. Nothing destructive is automated, and recipes umount before
+   `zfs destroy`.

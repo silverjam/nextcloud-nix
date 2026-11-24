@@ -207,8 +207,13 @@
           || { echo "refusing: migration-complete stamp missing (run zfs-verify-migration first)" >&2; exit 1; }
         test -f ${migrationState}/import-complete \
           || { echo "refusing: import-complete stamp missing (finish nc-import-archive first)" >&2; exit 1; }
-        [ "''${CONFIRM:-}" = "disaster" ] \
-          || { echo "set CONFIRM=disaster to remove ${disasterMirror}" >&2; exit 1; }
+        if [ "''${CONFIRM:-}" != "disaster" ]; then
+          echo "DRY RUN — nothing was changed. Set CONFIRM=disaster to proceed." >&2
+          echo "would remove the disaster mirror (the sdc1 second copy): ${disasterMirror}"
+          echo "reclaiming its space on / ($(df -h / | tail -1 | awk '{print $4}') free now)"
+          echo "surviving copies: ${zfsPoolPrimary} + ${zfsPoolBackup} (and the verified archive import)"
+          exit 0
+        fi
         rm -rf "${disasterMirror}"
         echo "disaster mirror removed — $(df -h / | tail -1 | awk '{print $4}') free on /"
       '';
@@ -233,9 +238,12 @@
         # the ZFS replica must be the verified surviving copy first
         test -f ${migrationState}/migration-complete \
           || { echo "refusing: migration-complete stamp missing (run zfs-verify-migration first)" >&2; exit 1; }
-        [ "''${CONFIRM:-}" = "mirror" ] \
-          || { echo "This DELETES $MIRROR (the retired rsync mirror, including its .trash)." >&2
-               echo "The ZFS replica (${replicaDataset}) is the surviving second copy. Set CONFIRM=mirror to proceed." >&2; exit 1; }
+        if [ "''${CONFIRM:-}" != "mirror" ]; then
+          echo "DRY RUN — nothing was changed. Set CONFIRM=mirror to proceed." >&2
+          echo "would delete the retired rsync mirror tree: $MIRROR (including its .trash)"
+          echo "surviving copy: the ZFS replica ${replicaDataset} ($(df -h / | tail -1 | awk '{print $4}') free on / now)"
+          exit 0
+        fi
         SZ="$(du -sh "$MIRROR" 2>/dev/null | cut -f1 || true)"
         rm -rf "$MIRROR"
         echo "mirror removed (freed ~''${SZ:-?}) — $(df -h / | tail -1 | awk '{print $4}') free on /"
@@ -249,9 +257,15 @@
           || { echo "refusing: migration-complete missing (run zfs-verify-migration first)" >&2; exit 1; }
         test -f ${migrationState}/import-complete \
           || { echo "refusing: import-complete missing (finish nc-import-archive first — this destroys the frozen pre-NC copy)" >&2; exit 1; }
-        [ "''${CONFIRM:-}" = "retire-archive" ] \
-          || { echo "This DESTROYS the frozen pre-NC copies: ${archiveDataset} + ${zfsPoolBackup}/archive, including all their snapshots." >&2
-               echo "The verified NC working copy is the surviving copy. Set CONFIRM=retire-archive to proceed." >&2; exit 1; }
+        if [ "''${CONFIRM:-}" != "retire-archive" ]; then
+          echo "DRY RUN — nothing was changed. Set CONFIRM=retire-archive to proceed." >&2
+          echo "would, in order:"
+          echo "  1. disable nextcloud-archive-bind.service (and unmount the interim bind)"
+          echo "  2. delete the interim member shares on '/${archiveBindMountName}'"
+          echo "  3. destroy ${archiveDataset} + ${zfsPoolBackup}/archive, including all their snapshots"
+          echo "surviving copy: the verified option-B tree under ${ncDataDir}/${archiveOwner}/files (import-complete is stamped)"
+          exit 0
+        fi
         # retire the interim bind first (its dataset is about to disappear)
         systemctl disable --now nextcloud-archive-bind.service 2>/dev/null || true
         # retire the interim member shares, scoped to the interim folder only
@@ -1798,9 +1812,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # sudo env_reset strips PATH and the nix feature flags the tail needs
         export PATH="/nix/var/nix/profiles/default/bin:$PATH"
         export NIX_CONFIG="experimental-features = nix-command flakes"
-        [ "''${CONFIRM:-}" = "primary" ] \
-          || { echo "This DESTROYS ${primaryDisk} (sdc1 NTFS). The verified second copy is the disaster mirror." >&2
-               echo "Set CONFIRM=primary to proceed." >&2; exit 1; }
         # interlock: the verified disaster mirror (root disk) is the one
         # second copy of the sdc1 content — the NTFS phase-1 mirror was
         # dropped from the plan (legacy sdb1 content is Phase-3-dropped)
@@ -1814,6 +1825,17 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           echo "refusing: no verified second copy of the sdc1 content found" >&2
           echo "(need the verified ${disasterMirror})" >&2
           exit 1
+        fi
+        # dry run by default: everything above is read-only, so print the plan
+        # and stop unless the operator typed the CONFIRM
+        if [ "''${CONFIRM:-}" != "primary" ]; then
+          echo "DRY RUN — nothing was changed. Set CONFIRM=primary to proceed." >&2
+          echo "would:"
+          echo "  1. destroy ${primaryDisk} (sdc1 NTFS) and create the ${zfsPoolPrimary} pool"
+          echo "  2. import the sdc1 content into ${zfsPoolPrimary}/nextcloud + ${archiveDataset}"
+          echo "  3. move the live datadir ${ncDataDir} onto ${zfsPoolPrimary}/nextcloud"
+          echo "verified second copy: ${disasterMirror} ($(find ${disasterMirror} -type f 2>/dev/null | wc -l) files)"
+          exit 0
         fi
         # device triple-check
         test -b "${primaryDisk}" || { echo "no such device: ${primaryDisk} — reconnect sdc1" >&2; exit 1; }
@@ -1896,9 +1918,14 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
         test -f ${migrationState}/phase2-complete \
           || { echo "refusing: phase-2 stamp missing (run zfs-create-primary first)" >&2; exit 1; }
-        [ "''${CONFIRM:-}" = "backup" ] \
-          || { echo "This DESTROYS ${backupDisk} (sdb1 NTFS mirror). The primary zfs datasets are the verified copies now." >&2
-               echo "Set CONFIRM=backup to proceed." >&2; exit 1; }
+        # dry run by default (everything above is read-only)
+        if [ "''${CONFIRM:-}" != "backup" ]; then
+          echo "DRY RUN — nothing was changed. Set CONFIRM=backup to proceed." >&2
+          echo "would destroy ${backupDisk} (sdb1 NTFS mirror) and create the ${zfsPoolBackup} pool,"
+          echo "then seed ${zfsPoolBackup}/nextcloud-data, ${zfsPoolBackup}/archive and ${resticReplica}"
+          echo "from the verified ${zfsPoolPrimary} datasets"
+          exit 0
+        fi
         test -b "${backupDisk}" || { echo "no such device: ${backupDisk} — reconnect sdb1" >&2; exit 1; }
         if findmnt -S "${backupDisk}" >/dev/null 2>&1; then
           echo "refusing: ${backupDisk} is mounted" >&2; exit 1

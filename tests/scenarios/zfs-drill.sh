@@ -81,6 +81,11 @@ ok "disaster mirror verified"
 step "phase 2: primary zfs pool; NC datadir moves onto zfs"
 nix run .#occ -- maintenance:mode --on >/dev/null
 umount /mnt/primary /mnt/backup 2>/dev/null || true
+step "dry run: create-primary without CONFIRM touches nothing"
+OUT="$(nix run .#zfs-create-primary 2>&1)"
+echo "$OUT" | grep -aq 'DRY RUN' || fail "create-primary did not dry-run (got: $OUT)"
+zpool list -H -o name 2>/dev/null | grep -qx drill-primary && fail "dry run created the pool"
+ok "create-primary is inert without CONFIRM"
 CONFIRM=primary nix run .#zfs-create-primary
 SAVED_TAR="$(ls -1 /var/backups/nextcloud/pre-zfs-datadir-*.tar.gz 2>/dev/null | tail -1 || true)"
 [ -n "$SAVED_TAR" ] || fail "no pre-zfs safety tar found"
@@ -96,6 +101,11 @@ findmnt -no FSTYPE /var/lib/nextcloud/data | grep -q zfs || fail "datadir not zf
 ok "resume path (import + verify, no recreation)"
 
 step "phase 3: backup zfs pool + replica seed"
+step "dry run: create-backup without CONFIRM touches nothing"
+OUT="$(nix run .#zfs-create-backup 2>&1)"
+echo "$OUT" | grep -aq 'DRY RUN' || fail "create-backup did not dry-run (got: $OUT)"
+zpool list -H -o name 2>/dev/null | grep -qx drill-backup && fail "dry run created the backup pool"
+ok "create-backup is inert without CONFIRM"
 CONFIRM=backup nix run .#zfs-create-backup
 findmnt -no TARGET /var/backups/zfs-replica >/dev/null || fail "replica not mounted"
 test -f /var/backups/zfs-replica/archive/personal-legacy.txt \
@@ -151,6 +161,10 @@ touch "$MS/import-complete"
 ERR="$(nix run .#nc-archive-retire 2>&1 >/dev/null || true)"
 echo "$ERR" | grep -aq 'CONFIRM' \
   || fail "retire ran without CONFIRM (got: $ERR)"
+zfs list -H -o name drill-primary/archive >/dev/null 2>&1 \
+  || fail "dry run destroyed the archive dataset"
+[ ! -f "$MS/archive-retired" ] || fail "dry run stamped archive-retired"
+ok "retire is inert without CONFIRM"
 CONFIRM=retire-archive nix run .#nc-archive-retire 2>&1 >/dev/null | tail -4
 zfs list -H -o name drill-primary/archive >/dev/null 2>&1 \
   && fail "frozen archive dataset survived retirement"

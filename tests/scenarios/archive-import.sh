@@ -120,6 +120,8 @@ mkdir -p /var/backups/disaster-mirror-sdc1
 printf x > /var/backups/disaster-mirror-sdc1/f.txt
 ERR="$(nix run .#zfs-disaster-mirror-remove 2>&1 >/dev/null || true)"
 echo "$ERR" | grep -aq 'CONFIRM' || fail "mirror-remove ran without CONFIRM"
+echo "$ERR" | grep -aq 'DRY RUN' || fail "mirror-remove did not dry-run"
+[ -e /var/backups/disaster-mirror-sdc1 ] || fail "dry run removed the mirror"
 CONFIRM=disaster nix run .#zfs-disaster-mirror-remove >/dev/null
 [ ! -e /var/backups/disaster-mirror-sdc1 ] || fail "mirror still present after removal"
 ok "mirror-remove unlock order verified"

@@ -274,8 +274,11 @@ just zfs-disaster-mirror-remove   # LAST: needs import-complete + CONFIRM=disast
 ```
 
 Interlocks are stamps under `/var/backups/nextcloud/migration-state/` —
-each phase refuses without the previous stamp, and both destructive recipes
-demand a typed `CONFIRM`. After Phase 2, `just sync-data` becomes snapshot +
+each phase refuses without the previous stamp. The destructive recipes
+(`zfs-create-primary`, `zfs-create-backup`, `nc-archive-retire`,
+`zfs-disaster-mirror-remove`, `nc-data-sync-purge`) are **dry runs unless the
+matching `CONFIRM` is set** — without it they print the plan and change
+nothing. After Phase 2, `just sync-data` becomes snapshot +
 incremental `zfs send/receive` into `backup/nextcloud-data` (48 snapshots
 retained), replacing the retired rsync mirror; `just zfs-check` reports pools,
 datasets, mounts and the last replication time.
