@@ -554,9 +554,12 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # "target is busy" while anything holds the bind, and only one layer
         # came off per attempt)
         ExecStart=/usr/bin/sh -c 'findmnt -no SOURCE "${archiveBindWhere}" 2>/dev/null | grep -qx "${archiveDataset}" || exec /usr/bin/mount --bind "${archiveSource}" "${archiveBindWhere}"'
-        # peel EVERY layer we ever stacked (umount removes the top one);
-        # succeed once the path is no longer our bind
-        ExecStop=/usr/bin/sh -c 'while umount "${archiveBindWhere}" 2>/dev/null; do :; done; ! findmnt -no SOURCE "${archiveBindWhere}" 2>/dev/null | grep -qx "${archiveDataset}"'
+        # peel EVERY layer we ever stacked (umount removes the top one).
+        # The layers are peers of one shared propagation group, so a plain
+        # umount tries to detach every peer at once and fails EBUSY when any
+        # one of them is held — break the group first. Succeed once the path
+        # is no longer our bind.
+        ExecStop=/usr/bin/sh -c 'while findmnt -no SOURCE "${archiveBindWhere}" >/dev/null 2>&1; do /usr/bin/mount --make-private "${archiveBindWhere}" 2>/dev/null; umount "${archiveBindWhere}" 2>/dev/null || break; done; ! findmnt -no SOURCE "${archiveBindWhere}" 2>/dev/null | grep -qx "${archiveDataset}"'
         [Install]
         WantedBy=multi-user.target
       '';
@@ -1301,8 +1304,15 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # ... and drop the file, so no target can ever start it again
         rm -f ${unitDir}/var-lib-nextcloud-data-archive-files-Archive.mount
         # peel EVERY layer the old unit stacked — a single umount left the rest
-        # mounted, which is how the stack survived deploys (32 deep, Nov 2026)
-        while umount "${ncDataDir}/${archiveOwner}/files/Archive" 2>/dev/null; do :; done
+        # mounted, which is how the stack survived deploys (32 deep, Nov 2026).
+        # The layers are peers in one shared propagation group: a plain umount
+        # tries to detach all peers and fails EBUSY if any is held, so break
+        # the group before each umount.
+        ARCHIVE_BIND="${ncDataDir}/${archiveOwner}/files/Archive"
+        while findmnt -no SOURCE "$ARCHIVE_BIND" >/dev/null 2>&1; do
+          mount --make-private "$ARCHIVE_BIND" 2>/dev/null || true
+          umount "$ARCHIVE_BIND" 2>/dev/null || break
+        done
         if ! findmnt -no SOURCE "${ncDataDir}/${archiveOwner}/files/Archive" >/dev/null 2>&1; then
           rm -rf "${ncDataDir}/${archiveOwner}/files/Archive" 2>/dev/null || true
         fi
@@ -2085,10 +2095,14 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         layers() { awk -v p="$ARCHIVE" '$2 == p { n++ } END { print n+0 }' /proc/self/mounts; }
 
         # 1) the datadir bind: peel every layer (umount removes the top one).
-        #    A shell cd'ed into the path, or NC serving from it, keeps it busy.
+        #    The layers are peers of one shared propagation group, so a plain
+        #    umount tries to detach every peer at once and fails EBUSY when any
+        #    one is held (a shell cd'ed in, NC serving from it). Break the
+        #    group first; lazy umount as the last resort.
         n=0
         while findmnt -no SOURCE "$WHERE" >/dev/null 2>&1; do
-          umount "$WHERE" 2>/dev/null \
+          mount --make-private "$WHERE" 2>/dev/null || true
+          umount "$WHERE" 2>/dev/null || umount -l "$WHERE" 2>/dev/null \
             || { echo "unstack: $WHERE is busy — cd out of it (and stop nextcloud-fpm/nextcloud-cron) and rerun" >&2; exit 1; }
           n=$((n + 1))
         done
@@ -2098,7 +2112,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         #    (unmounting the last would detach the archive from the host)
         m=0
         while [ "$(layers)" -gt 1 ]; do
-          umount "$ARCHIVE" 2>/dev/null \
+          mount --make-private "$ARCHIVE" 2>/dev/null || true
+          umount "$ARCHIVE" 2>/dev/null || umount -l "$ARCHIVE" 2>/dev/null \
             || { echo "unstack: $ARCHIVE is busy — something is inside it; rerun once clear" >&2; exit 1; }
           m=$((m + 1))
         done
