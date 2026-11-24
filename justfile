@@ -68,6 +68,10 @@ zfs-verify-migration:
 zfs-restic-migrate:
     nix run .#zfs-restic-migrate
 
+# DESTRUCTIVE: delete the retired rsync mirror tree (needs CONFIRM=mirror + migration-complete)
+nc-data-sync-purge:
+    nix run .#nc-data-sync-purge
+
 nc-import-archive:
     nix run .#nc-import-archive
 

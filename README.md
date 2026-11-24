@@ -536,7 +536,9 @@ the backup pool hourly — whole-dataset rollback plus a second copy, but no
 application-level history. See "Storage: migrating to ZFS". (The old hourly
 `rsync` data mirror was retired: it duplicated the file tree onto the root SSD
 and added nothing the ZFS replica and Nextcloud's never-expiring trash did not
-already cover.)
+already cover. `nix run .#deploy` tears down its units; the leftover tree
+(`/var/backups/nextcloud/data`) is deleted by the gated `nc-data-sync-purge`
+recipe — `CONFIRM=mirror`, and only after the `migration-complete` stamp.)
 
 - **Full** (daily 03:00, `nextcloud-backup.timer`): flips `maintenance:mode`
   on for the duration, prunes old snapshots by retention afterwards.

@@ -213,6 +213,34 @@
         echo "disaster mirror removed — $(df -h / | tail -1 | awk '{print $4}') free on /"
       '';
 
+      # purge the retired rsync mirror tree (${backupRoot}/data) — a root-disk
+      # duplicate of data/ that the old nextcloud-data-sync timer kept
+      # re-creating. Same shape as the other retire flows: the units must
+      # already be gone (a live timer would just re-create the tree), the
+      # replacement copy must be verified, and CONFIRM is typed.
+      ncDataSyncPurge = pkgs.writeShellScriptBin "nc-data-sync-purge" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
+        MIRROR="${backupRoot}/data"
+        [ -d "$MIRROR" ] || { echo "nothing to do: $MIRROR does not exist"; exit 0; }
+        # a live timer would re-create the tree, and a running pass must not be
+        # yanked mid-copy — deploy retires both (disable --now + stop + rm)
+        if systemctl is-enabled nextcloud-data-sync.timer >/dev/null 2>&1 \
+             || systemctl is-active nextcloud-data-sync.service >/dev/null 2>&1; then
+          echo "refusing: nextcloud-data-sync is still enabled/active — run 'nix run .#deploy' first" >&2
+          exit 1
+        fi
+        # the ZFS replica must be the verified surviving copy first
+        test -f ${migrationState}/migration-complete \
+          || { echo "refusing: migration-complete stamp missing (run zfs-verify-migration first)" >&2; exit 1; }
+        [ "''${CONFIRM:-}" = "mirror" ] \
+          || { echo "This DELETES $MIRROR (the retired rsync mirror, including its .trash)." >&2
+               echo "The ZFS replica (${replicaDataset}) is the surviving second copy. Set CONFIRM=mirror to proceed." >&2; exit 1; }
+        SZ="$(du -sh "$MIRROR" 2>/dev/null | cut -f1 || true)"
+        rm -rf "$MIRROR"
+        echo "mirror removed (freed ~''${SZ:-?}) — $(df -h / | tail -1 | awk '{print $4}') free on /"
+      '';
+
       ncArchiveRetire = pkgs.writeShellScriptBin "nc-archive-retire" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
@@ -2300,6 +2328,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         "zfs-disaster-mirror-create" = zfsDisasterCreate;
         "zfs-disaster-mirror-check" = zfsDisasterCheck;
         "zfs-disaster-mirror-remove" = zfsDisasterRemove;
+        "nc-data-sync-purge" = ncDataSyncPurge;
         "zfs-create-primary" = zfsCreatePrimary;
         "zfs-create-backup" = zfsCreateBackup;
         "zfs-replicate" = zfsReplicate;
@@ -2373,6 +2402,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
                 "${zfsDisasterCreate}/bin/zfs-disaster-mirror-create" \
                 "${zfsDisasterCheck}/bin/zfs-disaster-mirror-check" \
                 "${zfsDisasterRemove}/bin/zfs-disaster-mirror-remove" \
+                "${ncDataSyncPurge}/bin/nc-data-sync-purge" \
                 "${zfsCreatePrimary}/bin/zfs-create-primary" \
                 "${zfsCreateBackup}/bin/zfs-create-backup" \
                 "${zfsReplicate}/bin/zfs-replicate" \
