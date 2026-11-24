@@ -38,12 +38,23 @@ verified against real failures during the ZFS migration (Nov 2026).
    write-tool-created file) over `docker cp` for remote scripts.
 7. **heredoc bodies are command text**: the `''`-stripping applies to the
    whole command string including heredoc bodies of the tool call.
-8. **Rapid successive pushes ghost-run CI**: a push while the previous run
-   is pending-without-jobs leaves the new run pending too (no jobs created),
-   and the older run is cancelled seconds after the newer one is created.
-   Workaround: after pushing, wait for the run to materialize jobs or
-   trigger an explicit `gh workflow run CI` dispatch; `gh run watch` in the
-   background for long matrices.
+8. **CI runs serialize on a concurrency group; a waiting run shows
+   `jobs=0`.** That is normal, NOT a "ghost run" (an earlier version of this
+   note misread it). The workflow pins
+   `concurrency: group: ${{ github.workflow }}-${{ github.ref }}` with
+   `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`, so a
+   push/dispatch never cancels a run that is already going: the new run sits
+   `pending` and GitHub creates its jobs only once the group frees, so
+   `gh run view <id>` legitimately shows `status=pending jobs=0` for many
+   minutes. What DOES happen: queueing a new run cancels any *previously
+   pending* run in the group, so the newest push's run can end up
+   `cancelled` with `jobs=0` while an older run finishes — a push's CI may
+   therefore never execute at all. Pushes and `workflow_dispatch` runs share
+   the group, so a dispatch queues behind an in-progress push run too.
+   Workaround: check that the run's `headSha` is the commit you care about;
+   wait for the group to drain, or trigger an explicit
+   `gh workflow run CI --ref main -f run_docker=true -f docker_scenario=all`;
+   `gh run watch` in the background for long matrices.
 
 ## Nix indented-string (`''...''`) traps in flake recipes
 
