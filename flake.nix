@@ -548,8 +548,15 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         Type=oneshot
         RemainAfterExit=true
         ExecStartPre=/usr/bin/install -d -o ${ncUser} -g ${ncUser} -m 0770 "${archiveBindWhere}"
-        ExecStart=/usr/bin/mount --bind "${archiveSource}" "${archiveBindWhere}"
-        ExecStop=/usr/bin/umount "${archiveBindWhere}"
+        # idempotent bind: a bare mount --bind on an already-bound path stacks
+        # another layer, and every deploy restarts this unit — the real host
+        # reached 32 layers here (the stack survived because umount fails
+        # "target is busy" while anything holds the bind, and only one layer
+        # came off per attempt)
+        ExecStart=/usr/bin/sh -c 'findmnt -no SOURCE "${archiveBindWhere}" 2>/dev/null | grep -qx "${archiveDataset}" || exec /usr/bin/mount --bind "${archiveSource}" "${archiveBindWhere}"'
+        # peel EVERY layer we ever stacked (umount removes the top one);
+        # succeed once the path is no longer our bind
+        ExecStop=/usr/bin/sh -c 'while umount "${archiveBindWhere}" 2>/dev/null; do :; done; ! findmnt -no SOURCE "${archiveBindWhere}" 2>/dev/null | grep -qx "${archiveDataset}"'
         [Install]
         WantedBy=multi-user.target
       '';
@@ -1291,9 +1298,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         install -m 0644 ${archiveBindService} ${unitDir}/nextcloud-archive-bind.service
         # retire the pre-rename .mount unit (idempotent; safe on fresh hosts)
         systemctl disable --now var-lib-nextcloud-data-archive-files-Archive.mount 2>/dev/null || true
-        if findmnt -no SOURCE "${ncDataDir}/${archiveOwner}/files/Archive" >/dev/null 2>&1; then
-          umount "${ncDataDir}/${archiveOwner}/files/Archive" 2>/dev/null || true
-        fi
+        # ... and drop the file, so no target can ever start it again
+        rm -f ${unitDir}/var-lib-nextcloud-data-archive-files-Archive.mount
+        # peel EVERY layer the old unit stacked — a single umount left the rest
+        # mounted, which is how the stack survived deploys (32 deep, Nov 2026)
+        while umount "${ncDataDir}/${archiveOwner}/files/Archive" 2>/dev/null; do :; done
         if ! findmnt -no SOURCE "${ncDataDir}/${archiveOwner}/files/Archive" >/dev/null 2>&1; then
           rm -rf "${ncDataDir}/${archiveOwner}/files/Archive" 2>/dev/null || true
         fi
@@ -2054,6 +2063,54 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         systemctl start nextcloud-backup.timer nextcloud-snapshot.timer 2>/dev/null || true
       '';
 
+      # repair: peel the duplicate archive mount layers the pre-fix bind unit
+      # stacked (32 deep at the datadir path and 32 at the dataset's own
+      # mountpoint on the real host, Nov 2026). Every layer is the SAME
+      # dataset, so nothing here is destructive — the bottom layer is kept.
+      # Idempotent: a healthy host (one layer each) is a no-op.
+      ncArchiveUnstack = pkgs.writeShellScriptBin "nc-archive-unstack" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        export PATH="/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+        WHERE="${archiveBindWhere}"
+        ARCHIVE="${archiveSource}"
+        DS="${archiveDataset}"
+
+        zfs list -H -o name "$DS" >/dev/null 2>&1 \
+          || { echo "unstack: $DS is gone (retired) — nothing to peel"; exit 0; }
+
+        # mount entries at the dataset's own mountpoint (no spaces in that path,
+        # so a field-2 match against /proc/self/mounts is exact)
+        layers() { awk -v p="$ARCHIVE" '$2 == p { n++ } END { print n+0 }' /proc/self/mounts; }
+
+        # 1) the datadir bind: peel every layer (umount removes the top one).
+        #    A shell cd'ed into the path, or NC serving from it, keeps it busy.
+        n=0
+        while findmnt -no SOURCE "$WHERE" >/dev/null 2>&1; do
+          umount "$WHERE" 2>/dev/null \
+            || { echo "unstack: $WHERE is busy — cd out of it (and stop nextcloud-fpm/nextcloud-cron) and rerun" >&2; exit 1; }
+          n=$((n + 1))
+        done
+        echo "unstack: removed $n bind layer(s) at $WHERE"
+
+        # 2) the dataset's own mountpoint: peel duplicates, KEEP the bottom one
+        #    (unmounting the last would detach the archive from the host)
+        m=0
+        while [ "$(layers)" -gt 1 ]; do
+          umount "$ARCHIVE" 2>/dev/null \
+            || { echo "unstack: $ARCHIVE is busy — something is inside it; rerun once clear" >&2; exit 1; }
+          m=$((m + 1))
+        done
+        echo "unstack: removed $m duplicate layer(s) at $ARCHIVE"
+
+        findmnt -no SOURCE "$ARCHIVE" | grep -qx "$DS" \
+          || { echo "unstack: $DS is not mounted at $ARCHIVE — re-mount with 'zfs mount $DS'" >&2; exit 1; }
+        [ "$(layers)" = 1 ] \
+          || { echo "unstack: $ARCHIVE still has $(layers) layers" >&2; exit 1; }
+        echo "unstack: $DS mounted once at $ARCHIVE; datadir bind cleared"
+      '';
+
       zfsCheck = pkgs.writeShellScriptBin "zfs-check" ''
         set -euo pipefail
         echo "== zpool status =="
@@ -2236,6 +2293,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         "nc-import-archive" = ncImportArchive;
         "nc-archive-share" = ncArchiveShare;
         "nc-archive-retire" = ncArchiveRetire;
+        "nc-archive-unstack" = ncArchiveUnstack;
         "nc-transcode-unplayable" = ncTranscodeUnplayable;
         "zfs-check" = zfsCheck;
         "provisioned-passwords" = zfsProvisionedPasswords;
@@ -2308,6 +2366,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
                 "${ncImportArchive}/bin/nc-import-archive" \
                 "${ncArchiveShare}/bin/nc-archive-share" \
                 "${ncArchiveRetire}/bin/nc-archive-retire" \
+                "${ncArchiveUnstack}/bin/nc-archive-unstack" \
                 "${ncTranscodeUnplayable}/bin/nc-transcode-unplayable" \
                 "${zfsCheck}/bin/zfs-check" \
                 "${ncProvisionJob}/bin/nc-provision" \

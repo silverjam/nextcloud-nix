@@ -347,6 +347,15 @@ files. When the copy is verified and lived with, the frozen imports
 (import-complete + `CONFIRM=retire-archive`; ~1.15T reclaimed) — nothing
 automated invokes it, and replication skips the retired pairs from then on.
 
+`just nc-archive-unstack` repairs a host that accumulated duplicate mounts of
+the archive dataset: a pre-fix `nextcloud-archive-bind.service` re-ran a bare
+`mount --bind` on every deploy (the stack survived because `umount` reports
+"target is busy" while the bind is held), and a manual `zfs mount`/`mount -t
+zfs` can stack a second layer at the dataset's own mountpoint. The recipe
+peels every bind layer at the datadir path and every duplicate layer at
+`/mnt/archive`, keeping the bottom dataset mount; it is idempotent (a healthy
+host is a no-op). Run it from a shell that is not `cd`'ed into the archive.
+
 Retention is space-driven end to end: NC trash and file versions never
 auto-expire (`*_retention_obligation = disabled`), and snapshot history on
 both pools is pruned only below a free-space floor (150 GiB primary, 100 GiB

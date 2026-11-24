@@ -77,6 +77,10 @@ nc-archive-share:
 nc-archive-retire:
     nix run .#nc-archive-retire
 
+# repair: peel duplicate archive mount layers (bind stack / duplicate dataset mounts)
+nc-archive-unstack:
+    nix run .#nc-archive-unstack
+
 nc-transcode-unplayable:
     nix run .#nc-transcode-unplayable
 
