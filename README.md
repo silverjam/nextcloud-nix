@@ -292,7 +292,13 @@ it lives on primary it joins the replication set: the Phase-3 seed and every
 redundancy as the user data. The deploy reconciles the dataset too (for hosts
 whose primary pool predates this change), and `just zfs-restic-migrate` copies
 an existing root-disk repo onto it (idempotent; the source is kept until the
-copy verifies).
+copy verifies). Once the migration and import have run for a while, the
+pre-ZFS safety copies are redundant and can be deleted by hand:
+`/var/lib/nextcloud/data.pre-zfs`,
+`/var/backups/nextcloud/pre-zfs-datadir-*.tar.gz`, and the migrated restic
+source `/var/backups/nextcloud/repo.pre-zfs-*` (with its `.restic-pass`).
+Nothing removes these automatically — the stamped migration plus the two ZFS
+pools are the surviving copies.
 
 ### Full-pipeline rehearsal before touching real hardware
 
@@ -352,6 +358,10 @@ files. When the copy is verified and lived with, the frozen imports
 (`primary/archive` + `backup/archive`) retire via `nc-archive-retire`
 (import-complete + `CONFIRM=retire-archive`; ~1.15T reclaimed) — nothing
 automated invokes it, and replication skips the retired pairs from then on.
+Retirement is also safe against later deploys: `archive-retired` makes the
+bind unit refuse to start (`ConditionPathExists=!…/archive-retired`), and
+both the retire recipe and deploy remove the now-empty
+`Archive (Read only)` mountpoint, so the interim folder cannot reappear.
 
 `just nc-archive-unstack` repairs a host that accumulated duplicate mounts of
 the archive dataset: a pre-fix `nextcloud-archive-bind.service` re-ran a bare
