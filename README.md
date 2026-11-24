@@ -242,13 +242,6 @@ seed file + login intact. For a two-step jump (e.g. 32 → 33 → 34 when
 catching up) run the drill machinery per step by pinning the intermediate
 nixpkgs tree.
 
-### Upgrading and the data mirror
-
-The `.trash` semantics of `just sync-data` are deliberately decoupled: a
-file deleted on the new instance (e.g. during `occ upgrade` housekeeping)
-lands in `<target>/.trash/<date>` for 30 days — the mirror can never
-amplify an upgrade mistake beyond that window.
-
 ## Storage: migrating to ZFS
 
 The two USB data disks migrate from NTFS to ZFS: sdc1 (label `Data`, 681G) becomes
@@ -284,7 +277,7 @@ Interlocks are stamps under `/var/backups/nextcloud/migration-state/` —
 each phase refuses without the previous stamp, and both destructive recipes
 demand a typed `CONFIRM`. After Phase 2, `just sync-data` becomes snapshot +
 incremental `zfs send/receive` into `backup/nextcloud-data` (48 snapshots
-retained), replacing the rsync mirror; `just zfs-check` reports pools,
+retained), replacing the retired rsync mirror; `just zfs-check` reports pools,
 datasets, mounts and the last replication time.
 
 Phase 2 also creates `primary/restic` (mounted at `/var/backups/restic`) — the
@@ -423,9 +416,7 @@ provisionedUsers = {
     `pg_dump`) is taken into
     `/var/backups/nextcloud/deprovisioned/<uid>/<ts>/` and the delete is
     *refused* if that backup cannot be verified. Entries no-op once the user
-    is gone; the next `sync-data` cycle adds a second copy of the removed
-    files to the mirror's `.trash`. Removing a user from
-    `provisionedUsers` alone does nothing;
+    is gone. Removing a user from `provisionedUsers` alone does nothing;
   - passwords of existing users are never rotated by deploys.
 
 ### Everything else worth knowing
@@ -530,14 +521,13 @@ DB role from the archived `config.php`, so an archive restores correctly even
 onto a fresh instance.
 
 **User file data (`/var/lib/nextcloud/data`) is deliberately NOT in these
-archives.** It's mirrored separately by `nextcloud-data-sync.timer` (hourly,
-rsync to `dataSyncTarget` — default `/var/backups/nextcloud/data`, change one
-line in flake.nix to point at another mounted volume; set `""` to disable).
-The mirror is deletion-safe: removed/overwritten files are kept in
-`<target>/.trash/<date>` for 30 days (`dataSyncTrashDays`), and regenerable
-caches (`nextcloud.log`, preview thumbnails) are skipped. Same-disk mirrors
-protect against mistakes, not disk death — point the target at another
-volume for that.
+archives.** It is protected by ZFS instead: the datadir lives on the
+`primary/nextcloud` dataset and `zfs-replicate` mirrors it (and the archive) to
+the backup pool hourly — whole-dataset rollback plus a second copy, but no
+application-level history. See "Storage: migrating to ZFS". (The old hourly
+`rsync` data mirror was retired: it duplicated the file tree onto the root SSD
+and added nothing the ZFS replica and Nextcloud's never-expiring trash did not
+already cover.)
 
 - **Full** (daily 03:00, `nextcloud-backup.timer`): flips `maintenance:mode`
   on for the duration, prunes old snapshots by retention afterwards.
@@ -561,16 +551,12 @@ volume for that.
 ```bash
 just backup                 # full now (brief maintenance:mode)
 just snapshot               # incremental now (no downtime)
-just sync-data              # mirror data/ to dataSyncTarget now (hourly timer)
+just sync-data              # snapshot + replicate data/ to the backup pool now
 just backup-list            # snapshots, ids, dedup size
 just backup-validate        # latest dump readable? (extract + pg_restore TOC)
 just backup-validate-deep   # latest dump FULLY restores? (scratch db, dropped)
 just backup-check           # repo integrity (manual, may be slow)
 just backup-prune           # apply retention manually
-
-just mirror-list            # data/ mirror overview + last syncs
-just mirror-check           # live vs mirror counts (quick)
-just mirror-check deep      # authoritative rsync dry-run diff
 
 just restore                # latest archive — interactive confirm (type RESTORE)
 just restore <snapshot-id>  # or FORCE=1 just restore <id>
@@ -620,8 +606,7 @@ repos are format-compatible; `just backup-list` works identically remote.
 - **Backup/restore drills** (run on either harness): `backup-drill`
   (DB marker planted → snapshot → mutated → restored → assert the marker
   *rolled back*; maintenance-mode hygiene; no scratch DBs left; restic
-  `check`), `mirror-drill` (`.trash` deletion preservation + copy-back
-  recovery + 30-day aging + flock overlap guard), `restore-fresh`
+  `check`), `restore-fresh`
   (`reset` wipes the instance → restore from the surviving repo → admin
   password, DB marker and login all return), `retention` (101 snapshots
   saturating restic's hourly buckets → `forget --prune` deletes 96, the live

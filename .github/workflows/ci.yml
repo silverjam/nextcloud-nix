@@ -44,7 +44,6 @@ on:
           - full
           - reset
           - backup-drill
-          - mirror-drill
           - restore-fresh
           - retention
           - users-provision
@@ -72,7 +71,6 @@ on:
           - reboot
           - zfs-drill
           - backup-drill
-          - mirror-drill
           - restore-fresh
           - retention
           - users-provision
@@ -140,7 +138,6 @@ jobs:
           - full
           - reset
           - backup-drill
-          - mirror-drill
           - restore-fresh
           - retention
           - users-provision

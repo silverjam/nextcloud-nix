@@ -16,8 +16,8 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 CACHE="$REPO/tests/.vm-cache"
 SCENARIO="${1:-install}"
-case "$SCENARIO" in install|full|reset|reboot|backup-drill|mirror-drill|restore-fresh|retention|users-provision|zfs-drill|upgrade-nc-major|upgrade-nc-minor|upgrade-pg-major|upgrade-pg-minor) ;;
-  *) echo "usage: tests/vm-run.sh [install|full|reset|reboot|backup-drill|mirror-drill|restore-fresh|retention|upgrade-*]" >&2; exit 64 ;;
+case "$SCENARIO" in install|full|reset|reboot|backup-drill|restore-fresh|retention|users-provision|zfs-drill|upgrade-nc-major|upgrade-nc-minor|upgrade-pg-major|upgrade-pg-minor) ;;
+  *) echo "usage: tests/vm-run.sh [install|full|reset|reboot|backup-drill|restore-fresh|retention|upgrade-*]" >&2; exit 64 ;;
 esac
 command -v ssh >/dev/null || { echo "ssh not available" >&2; exit 1; }
 command -v tar >/dev/null || { echo "tar not available" >&2; exit 1; }

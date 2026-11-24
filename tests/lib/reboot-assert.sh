@@ -9,10 +9,10 @@ done
 ok "db/fpm/caddy/init active after reboot"
 
 step "timers registered after reboot (Persistent=true)"
-for t in nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer; do
+for t in nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer; do
   systemctl list-timers "$t" --no-pager | grep -q "$t" || fail "$t missing after reboot"
 done
-ok "all four timers registered"
+ok "all three timers registered"
 
 step "instance state persisted"
 test -f /var/lib/nextcloud/config/config.php || fail "config.php gone"

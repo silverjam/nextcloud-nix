@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Scenario "full": install + seed file + db/app-state backup + validation +
-# state-restore roundtrip + data-mirror sanity.
+# state-restore roundtrip.
 
 install_and_assert
 
@@ -11,12 +11,6 @@ printf 'nc-test-payload-%s\n' "$(date +%s)" \
 chown nextcloud:nextcloud /var/lib/nextcloud/data/admin/files/nc-test-seed.txt
 nix run .#occ -- files:scan admin | grep -qE 'Added|new files|Found' || true
 ok "seed file present"
-
-step "data mirror (also feeds .trash semantics)"
-nix run .#nc-data-sync -- sync
-nix run .#nc-data-sync -- compare-deep | grep -q "in perfect sync" \
-  || fail "mirror not in sync right after sync"
-ok "mirror in sync"
 
 step "app-state backup (db dump + config, no data/)"
 nix run .#nc-backup -- incremental

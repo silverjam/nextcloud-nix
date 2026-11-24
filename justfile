@@ -1,4 +1,4 @@
-units := "nextcloud-db nextcloud-fpm nextcloud-caddy nextcloud-init nextcloud-cron.service nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer nextcloud-provision.service"
+units := "nextcloud-db nextcloud-fpm nextcloud-caddy nextcloud-init nextcloud-cron.service nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-provision.service"
 port := "55555"  # keep in sync with webPort in flake.nix
 
 # available tasks
@@ -52,14 +52,9 @@ zfs-create-primary:
 zfs-create-backup:
     nix run .#zfs-create-backup
 
-# ongoing: snapshot + incremental zfs send/receive (replaces rsync mirror)
+# ongoing: snapshot + incremental zfs send/receive (primary -> backup pool)
 sync-data:
-    #!/usr/bin/env bash
-    if [ -f /var/backups/nextcloud/migration-state/migration-complete ]; then
-      nix run .#zfs-replicate
-    else
-      sudo systemctl start --wait nextcloud-data-sync.service
-    fi
+    nix run .#zfs-replicate
 
 # status: pools, datasets, snapshots, mounts, migration stamps
 zfs-check:
@@ -137,19 +132,6 @@ hooks-setup:
 # (--all-files neutralizes lefthook's staged-files scoping)
 check:
     nix run nixpkgs#lefthook -- run pre-commit --all-files
-
-# mirror overview: sizes, file counts, last syncs, preserved deletions
-mirror-list:
-    nix run .#nc-data-sync -- status
-
-# compare live data/ vs mirror — quick counts; mirror-check deep = authoritative
-mirror-check deep="":
-    #!/usr/bin/env bash
-    if [ "{{ deep }}" = "deep" ]; then
-      nix run .#nc-data-sync -- compare-deep
-    else
-      nix run .#nc-data-sync -- compare-quick
-    fi
 
 # point https://<tailnet>.ts.net at Nextcloud via tailscale serve
 tailscale:
@@ -235,7 +217,7 @@ status *unit_args:
 follow unit="all":
     #!/usr/bin/env bash
     if [ "{{ unit }}" = "all" ]; then
-      journalctl -f -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron -u nextcloud-backup -u nextcloud-snapshot -u nextcloud-data-sync
+      journalctl -f -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron -u nextcloud-backup -u nextcloud-snapshot
     else
       journalctl -f -u "{{ unit }}"
     fi
@@ -246,7 +228,7 @@ logs unit="all" lines="80":
     if [ "{{ unit }}" = "all" ]; then
       journalctl -n {{ lines }} --no-pager --full \
         -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron \
-        -u nextcloud-backup -u nextcloud-snapshot -u nextcloud-data-sync
+        -u nextcloud-backup -u nextcloud-snapshot
     else
       journalctl -u "{{ unit }}" -n {{ lines }} --no-pager --full
     fi
@@ -256,7 +238,7 @@ errors:
     #!/usr/bin/env bash
     journalctl --no-pager --full -p err --since "24 hours ago" \
       -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron \
-      -u nextcloud-backup -u nextcloud-snapshot -u nextcloud-data-sync
+      -u nextcloud-backup -u nextcloud-snapshot
 
 # php stack traces of requests that ran >10s (see php-fpm slowlog)
 slowlog:

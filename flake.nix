@@ -84,13 +84,6 @@
       keepWeekly = "6";
       keepMonthly = "6";
 
-      # User-data directory mirror: rsync data/ -> this target (hourly).
-      # Same-disk default = protection against wrong-deletion/config mistakes;
-      # point it at a different volume (e.g. /mnt/nc-mirror) for disk failure
-      # resilience. Set to "" to disable the job (timers become a no-op).
-      dataSyncTarget = "${backupRoot}/data";
-      dataSyncTrashDays = "30"; # deletions preserved in <target>/.trash for this many days
-
       # ------------------------------------------------------------------
       # ZFS storage migration (primary + backup pools); see README "Storage"
       # ------------------------------------------------------------------
@@ -1293,8 +1286,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         install -m 0644 ${backupTimer}   ${unitDir}/nextcloud-backup.timer
         install -m 0644 ${snapshotService} ${unitDir}/nextcloud-snapshot.service
         install -m 0644 ${snapshotTimer} ${unitDir}/nextcloud-snapshot.timer
-        install -m 0644 ${dataSyncService} ${unitDir}/nextcloud-data-sync.service
-        install -m 0644 ${dataSyncTimer} ${unitDir}/nextcloud-data-sync.timer
         install -m 0644 ${redisUnit} ${unitDir}/nextcloud-redis.service
         install -m 0644 ${provisionService} ${unitDir}/nextcloud-provision.service
         install -m 0644 ${archiveBindService} ${unitDir}/nextcloud-archive-bind.service
@@ -1324,12 +1315,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         else
           install -d -o ${ncUser} -g ${ncUser} -m 0700 ${resticRepoFallback}
         fi
-        # Nix bakes dataSyncTarget at eval time — shellcheck sees literals
-        # where these guard the "disabled" knob (empty string).
-        # shellcheck disable=SC2157
-        if [ -n "${dataSyncTarget}" ]; then
-          install -d -o ${ncUser} -g ${ncUser} -m 0700 ${dataSyncTarget}
-        fi
 
         systemctl daemon-reload
         echo "== restarting to pick up the current build =="
@@ -1343,10 +1328,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         systemctl restart nextcloud-caddy.service
         systemctl restart nextcloud-init.service
         systemctl restart nextcloud-backup.timer nextcloud-snapshot.timer
-        # shellcheck disable=SC2157
-        if [ -n "${dataSyncTarget}" ]; then
-          systemctl restart nextcloud-data-sync.timer
-        fi
         systemctl restart nextcloud-provision.service
 
         echo "== enabling services =="
@@ -1360,10 +1341,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           nextcloud-backup.timer \
           nextcloud-snapshot.timer \
           nextcloud-cron.timer
-        # shellcheck disable=SC2157
-        if [ -n "${dataSyncTarget}" ]; then
-          systemctl enable --now nextcloud-data-sync.timer
-        fi
 
         echo "== ffmpeg + p7zip (nix env) + music app =="
         # the music app installs from the NC app store: platform versioning
@@ -1399,8 +1376,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         echo
         echo "== stack status =="
         for u in nextcloud-db nextcloud-fpm nextcloud-caddy nextcloud-init \
-                 nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer \
-                 nextcloud-data-sync.timer; do
+                 nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer; do
           printf "  %-28s %s\n" "$u" "$(systemctl is-active "$u")"
         done
         echo
@@ -1542,7 +1518,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           --exclude "${ncRoot}/cache" \
           --exclude "${ncRoot}/data" \
           --exclude "${ncRoot}/php-slow.log" \
-          --exclude "${ncRoot}/.data-sync.lock" \
           --exclude "${ncRoot}/.psql_history" \
           "${ncRoot}" "${stashRoot}"
 
@@ -1657,129 +1632,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         else
           echo "== previous config/store-apps kept at *.pre-restore-$TS (data/ untouched) =="
         fi
-      '';
-
-      # ------------------------------------------------------------------
-      # User-data directory mirror (rsync, deletion-safe via .trash/<date>)
-      # ------------------------------------------------------------------
-      ncDataSyncJob = pkgs.writeShellScriptBin "nc-data-sync" ''
-        set -euo pipefail
-        export PATH="/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
-        MODE="''${1:-sync}"
-        case "$MODE" in sync|status|compare-quick|compare-deep) ;;
-          *) echo "usage: nc-data-sync [sync|status|compare-quick|compare-deep]" >&2; exit 64 ;;
-        esac
-
-        # Nix bakes dataSyncTarget at eval time — shellcheck sees a literal
-        # where this guards the "disabled" knob (empty string).
-        # shellcheck disable=SC2157
-        if [ -z "${dataSyncTarget}" ]; then
-          echo "data-sync: dataSyncTarget not configured — nothing to do"
-          exit 0
-        fi
-
-        # status needs journal + root-readable dirs: prefer root.
-        # everything else must run as nextcloud (file ownership consistency).
-        ME="$(id -un)"
-        if [ "$MODE" = "status" ]; then
-          if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
-        elif [ "$ME" != "${ncUser}" ]; then
-          if [ "$(id -u)" = "0" ]; then
-            exec ${pkgs.util-linux}/bin/runuser -u ${ncUser} -- "$0" "$@"
-          else
-            exec sudo -u ${ncUser} env HOME=${ncRoot} "$0" "$@"
-          fi
-        fi
-        export HOME=${ncRoot}
-
-        EXCLUDES=(--exclude '/nextcloud.log' --exclude '/appdata_*/preview')
-        CNT() {
-          ${pkgs.findutils}/bin/find "$1" -type f \
-            ! -path '*/appdata_*/preview/*' ! -name 'nextcloud.log' \
-            ! -path '*/.trash/*' | wc -l
-        }
-
-        case "$MODE" in
-          status)
-            echo "== user-data mirror =="
-            echo "target: ${dataSyncTarget}"
-            du -sh "${ncRoot}/data" 2>/dev/null | sed 's/^/  live  : /' || true
-            du -sh "${dataSyncTarget}" 2>/dev/null | sed 's/^/  mirror: /' || true
-            echo "files (excl. caches): live $(CNT "${ncRoot}/data") / mirror $(CNT "${dataSyncTarget}")"
-            if [ -d "${dataSyncTarget}/.trash" ]; then
-              echo "preserved deletions: $(du -sh "${dataSyncTarget}/.trash" 2>/dev/null | cut -f1) across $(find "${dataSyncTarget}/.trash" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l) day-dirs"
-            else
-              echo "preserved deletions: none"
-            fi
-            echo "== last syncs (journal) =="
-            journalctl -u nextcloud-data-sync -q --no-pager -n 400 2>/dev/null \
-              | grep -F 'mirrored to' | tail -3 || true
-            systemctl list-timers nextcloud-data-sync.timer --no-pager 2>/dev/null | sed -n '2p' || true
-            exit 0
-            ;;
-          compare-quick)
-            echo "== quick compare (regenerable caches excluded from counting) =="
-            echo "live files  : $(CNT "${ncRoot}/data")"
-            echo "mirror files: $(CNT "${dataSyncTarget}")"
-            echo "sizes (informative only — caches/trash skew them):"
-            du -sh "${ncRoot}/data" 2>/dev/null | sed 's/^/  live  : /' || true
-            du -sh "${dataSyncTarget}" 2>/dev/null | sed 's/^/  mirror: /' || true
-            echo "hint: mismatch? run: nix run .#nc-data-sync -- compare-deep"
-            exit 0
-            ;;
-          compare-deep)
-            echo "== deep compare: rsync --dry-run --itemize-changes =="
-            set +e
-            RS_OUT="$(${pkgs.rsync}/bin/rsync -a -n --itemize-changes --delete \
-              "''${EXCLUDES[@]}" --exclude '/.trash' \
-              ${ncRoot}/data/ ${dataSyncTarget}/ 2>&1)"
-            set -e
-            COUNT="$(printf '%s\n' "$RS_OUT" | grep -cE '^([<c>][fs.]|\*deleting)' || true)"
-            if [ "$COUNT" = 0 ]; then
-              echo "in perfect sync"
-            else
-              printf '%s\n' "$RS_OUT" | sed -n '1,150p'
-              echo "... $(printf '%s\n' "$RS_OUT" | wc -l) entries total — mirror is out of date (run nc-data-sync sync)"
-              exit 1
-            fi
-            exit 0
-            ;;
-        esac
-
-        # ---- sync ----
-        [ -d "${dataSyncTarget}" ] || { echo "data-sync: target ${dataSyncTarget} missing (deploy should have created it)" >&2; exit 1; }
-
-        DELS="${dataSyncTarget}/.trash/$(date +%F)"
-
-        set +e
-        ${pkgs.util-linux}/bin/flock -n -E 3 "${ncRoot}/.data-sync.lock" \
-          ${pkgs.rsync}/bin/rsync \
-            -a \
-            --delete \
-            --backup --backup-dir="$DELS/" \
-            --exclude '/.trash' \
-            "''${EXCLUDES[@]}" \
-            ${ncRoot}/data/ ${dataSyncTarget}/
-        rc=$?
-        set -e
-        if [ "$rc" = 3 ]; then
-          echo "data-sync: previous sync still running — skipped"
-          exit 0
-        fi
-        if [ "$rc" != 0 ]; then
-          echo "data-sync: rsync failed (rc=$rc)" >&2
-          exit "$rc"
-        fi
-
-        # age out preserved deletions
-        if [ -d "${dataSyncTarget}/.trash" ]; then
-          ${pkgs.findutils}/bin/find "${dataSyncTarget}/.trash" \
-            -mindepth 1 -maxdepth 1 -type d -mtime +${dataSyncTrashDays} \
-            -exec rm -rf {} + 2>/dev/null || true
-        fi
-
-        echo "data-sync: ${ncRoot}/data mirrored to ${dataSyncTarget} (deletions kept in .trash for ${dataSyncTrashDays} days)"
       '';
 
       # ------------------------------------------------------------------
@@ -1927,7 +1779,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           nix run .#occ -- maintenance:mode --on >/dev/null 2>&1 || true
           nix run .#apply-config >/dev/null 2>&1 || true
           systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-init \
-            nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer \
+            nextcloud-backup.timer nextcloud-snapshot.timer \
             nextcloud-provision.service nextcloud-cron.timer 2>/dev/null || true
           SAVED="${backupRoot}/pre-zfs-datadir-$(date +%Y%m%d-%H%M%S).tar.gz"
           tar czf "$SAVED" -C /var/lib/nextcloud data
@@ -2350,37 +2202,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
       '';
 
-      dataSyncService = pkgs.writeText "nextcloud-data-sync.service" ''
-        [Unit]
-        Description=Nextcloud user-data mirror — rsync data/ to dataSyncTarget (Nix-managed)
-
-        [Service]
-        Type=oneshot
-        User=${ncUser}
-        Group=${ncUser}
-        UMask=0077
-        Environment="PATH=${ncToolsEnv}/bin:/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        ExecStart=${ncDataSyncJob}/bin/nc-data-sync
-        TimeoutStartSec=4h
-        NoNewPrivileges=true
-        ProtectSystem=strict
-        ProtectHome=true
-        ReadWritePaths=${ncRoot} ${dataSyncTarget}
-        RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-      '';
-
-      dataSyncTimer = pkgs.writeText "nextcloud-data-sync.timer" ''
-        [Unit]
-        Description=Hourly user-data mirror sync (Nix-managed)
-
-        [Timer]
-        OnCalendar=hourly
-        RandomizedDelaySec=5m
-        Persistent=true
-
-        [Install]
-        WantedBy=timers.target
-      '';
     in
     {
       packages.${system} = {
@@ -2388,7 +2209,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         "apply-config" = applyConfigTool;
         "nc-backup" = ncBackupJob;
         "nc-restore" = ncRestoreJob;
-        "nc-data-sync" = ncDataSyncJob;
         "nc-provision" = ncProvisionJob;
         "drives-mount" = drivesMount;
         "drives-umount" = drivesUmount;
@@ -2462,7 +2282,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
                 "${occ}/bin/nextcloud-occ" \
                 "${ncBackupJob}/bin/nc-backup" \
                 "${ncRestoreJob}/bin/nc-restore" \
-                "${ncDataSyncJob}/bin/nc-data-sync" \
                 ${dbInit} \
                 ${dbReady} \
                 ${initScript} \

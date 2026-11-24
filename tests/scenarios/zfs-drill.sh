@@ -27,7 +27,7 @@ mkdir -p "$W"
 LOA=; LOB=
 cleanup() {
   systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-init \
-    nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-data-sync.timer \
+    nextcloud-backup.timer nextcloud-snapshot.timer \
     nextcloud-provision.service nextcloud-cron.timer 2>/dev/null || true
   zpool destroy drill-primary 2>/dev/null || true
   zpool destroy drill-backup 2>/dev/null || true
