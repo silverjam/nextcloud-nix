@@ -1852,8 +1852,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           echo "(need the verified ${disasterMirror})" >&2
           exit 1
         fi
-        # dry run by default: everything above is read-only, so print the plan
-        # and stop unless the operator typed the CONFIRM
+        # dry run by default: everything above is read-only, so print the real
+        # commands (APPLY block) and stop unless the operator typed the CONFIRM
         if [ "''${CONFIRM:-}" != "primary" ]; then
           echo "DRY RUN — nothing was changed. Set CONFIRM=primary to proceed." >&2
           echo "# would: destroy ${primaryDisk} (sdc1 NTFS), create the ${zfsPoolPrimary} pool,"

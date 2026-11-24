@@ -84,7 +84,9 @@ umount /mnt/primary /mnt/backup 2>/dev/null || true
 step "dry run: create-primary without CONFIRM touches nothing"
 OUT="$(nix run .#zfs-create-primary 2>&1)"
 echo "$OUT" | grep -aq 'DRY RUN' || fail "create-primary did not dry-run (got: $OUT)"
-echo "$OUT" | grep -aq 'zpool create -f.*drill-primary' \
+# the pool name sits on the continuation line of the (backslash-wrapped)
+# zpool create, so match the command and its next line together
+echo "$OUT" | grep -A1 'zpool create -f' | grep -aq 'drill-primary' \
   || fail "create-primary dry run did not print the real zpool create (got: $OUT)"
 zpool list -H -o name 2>/dev/null | grep -qx drill-primary && fail "dry run created the pool"
 ok "create-primary is inert without CONFIRM"
