@@ -1,4 +1,4 @@
-units := "nextcloud-db nextcloud-fpm nextcloud-caddy nextcloud-init nextcloud-cron.service nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-provision.service"
+units := "nextcloud-db nextcloud-fpm nextcloud-caddy nextcloud-init nextcloud-cron.service nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-sync.service nextcloud-sync.timer nextcloud-provision.service"
 port := "55555"  # keep in sync with webPort in flake.nix
 
 # available tasks
@@ -52,7 +52,7 @@ zfs-create-primary:
 zfs-create-backup:
     nix run .#zfs-create-backup
 
-# ongoing: snapshot + incremental zfs send/receive (primary -> backup pool)
+# ongoing: Sanoid GFS snapshots + Syncoid replication (primary -> backup pool)
 sync-data:
     nix run .#zfs-replicate
 
@@ -198,7 +198,7 @@ reset:
     [ "$(id -u)" -ne 0 ] && SUDO=sudo
     echo "== stopping services =="
     $SUDO systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-cron.timer nextcloud-cron.service nextcloud-init
-    $SUDO systemctl stop nextcloud-backup.timer nextcloud-snapshot.timer
+    $SUDO systemctl stop nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-sync.timer nextcloud-sync.service
     $SUDO systemctl stop nextcloud-db
     echo "== deleting data =="
     $SUDO rm -rf /var/lib/nextcloud /var/lib/nextcloud-db
@@ -225,7 +225,7 @@ status *unit_args:
 follow unit="all":
     #!/usr/bin/env bash
     if [ "{{ unit }}" = "all" ]; then
-      journalctl -f -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron -u nextcloud-backup -u nextcloud-snapshot
+      journalctl -f -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron -u nextcloud-backup -u nextcloud-snapshot -u nextcloud-sync
     else
       journalctl -f -u "{{ unit }}"
     fi
@@ -236,7 +236,7 @@ logs unit="all" lines="80":
     if [ "{{ unit }}" = "all" ]; then
       journalctl -n {{ lines }} --no-pager --full \
         -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron \
-        -u nextcloud-backup -u nextcloud-snapshot
+        -u nextcloud-backup -u nextcloud-snapshot -u nextcloud-sync
     else
       journalctl -u "{{ unit }}" -n {{ lines }} --no-pager --full
     fi
@@ -246,7 +246,7 @@ errors:
     #!/usr/bin/env bash
     journalctl --no-pager --full -p err --since "24 hours ago" \
       -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron \
-      -u nextcloud-backup -u nextcloud-snapshot
+      -u nextcloud-backup -u nextcloud-snapshot -u nextcloud-sync
 
 # php stack traces of requests that ran >10s (see php-fpm slowlog)
 slowlog:
@@ -274,7 +274,8 @@ dump lines="120":
       done
       echo "## combined journal — last {{ lines }} lines"
       journalctl -n {{ lines }} --no-pager --full \
-        -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron
+        -u nextcloud-db -u nextcloud-fpm -u nextcloud-caddy -u nextcloud-init -u nextcloud-cron \
+        -u nextcloud-backup -u nextcloud-snapshot -u nextcloud-sync
       echo
       echo "## php slowlog (requests > 10s)"
       sudo -n cat /var/lib/nextcloud/php-slow.log 2>/dev/null | tail -n 80 || \

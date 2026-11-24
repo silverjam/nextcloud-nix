@@ -19,6 +19,14 @@ modprobe zfs 2>/dev/null || {
 zfs version >/dev/null
 ok "zfs $(zfs version | head -1) in guest kernel"
 
+step "sync timer wired by deploy"
+systemctl is-enabled --quiet nextcloud-sync.timer \
+  || fail "nextcloud-sync.timer not enabled by deploy"
+# the drill drives zfs-replicate by hand; stop the hourly timer so a tick
+# cannot race the planted-snapshot retention assertions
+systemctl stop nextcloud-sync.timer
+ok "hourly sync timer enabled (stopped for the drill)"
+
 # clean prior drill artifacts so repeated runs never fill the disk
 rm -rf /var/backups/zfs-drill-* 2>/dev/null || true
 W="/var/backups/zfs-drill-$(date +%s)"
@@ -132,14 +140,34 @@ test -e /var/backups/restic/repo/config \
   || fail "restic repo not initialised on primary/restic"
 ok "restic repo lives on drill-primary/restic"
 
-step "replication: two runs (full + incremental)"
+step "replication: Sanoid snapshots + Syncoid mirror"
 nix run .#zfs-replicate
 # awk counts: grep -c exits 1 on zero matches and set -e kills the script
-PREV_SNAPS="$(zfs list -t snapshot -H -o name 2>/dev/null | awk '/nextcloud@sync-/{n++} END{print n+0}')"
+NC_AUTO="$(zfs list -t snapshot -H -o name drill-primary/nextcloud | awk '/@autosnap_/{n++} END{print n+0}')"
+[ "$NC_AUTO" -ge 1 ] || fail "sanoid made no autosnap snapshot"
+REP_AUTO="$(zfs list -t snapshot -H -o name drill-backup/nextcloud-data | awk '/@autosnap_/{n++} END{print n+0}')"
+[ "$REP_AUTO" -ge 1 ] || fail "syncoid replicated no autosnap snapshot"
+ok "sanoid snapshots replicated ($NC_AUTO source / $REP_AUTO replica)"
+
+step "replication keeps the datadir and replica mounts separate"
+findmnt -no SOURCE /var/lib/nextcloud/data | grep -qx drill-primary/nextcloud \
+  || fail "syncoid changed the live datadir mount"
+findmnt -no SOURCE /var/backups/zfs-replica/nextcloud-data \
+  | grep -qx drill-backup/nextcloud-data \
+  || fail "syncoid changed the replica mountpoint"
+ok "datadir + replica mountpoints intact"
+
+step "replication: incremental send + target snapshot pruning"
+zfs snapshot drill-primary/nextcloud@drill-sync-test
+zfs snapshot drill-backup/nextcloud-data@drill-target-only
 nix run .#zfs-replicate
-NEW_SNAPS="$(zfs list -t snapshot -H -o name 2>/dev/null | awk '/nextcloud@sync-/{n++} END{print n+0}')"
-[ "$NEW_SNAPS" -gt "$PREV_SNAPS" ] || fail "snapshots not accumulating"
-ok "replication applying + snapshot history keeping"
+zfs list -H -o name drill-backup/nextcloud-data@drill-sync-test >/dev/null 2>&1 \
+  || fail "syncoid did not replicate the new snapshot"
+zfs list -H -o name drill-backup/nextcloud-data@drill-target-only >/dev/null 2>&1 \
+  && fail "syncoid left a target-only snapshot"
+zfs destroy drill-primary/nextcloud@drill-sync-test
+zfs destroy drill-backup/nextcloud-data@drill-sync-test
+ok "incremental send works; target-only snapshots pruned"
 
 step "restic repo replicated to the backup pool"
 zfs list -H -o name drill-backup/restic >/dev/null 2>&1 \
@@ -148,13 +176,27 @@ test -e /var/backups/zfs-replica/restic/repo/config \
   || fail "restic repo not replicated to the backup pool"
 ok "restic repo has a send/receive replica on drill-backup/restic"
 
-step "retention: syncs clamp to the keep-48 floor (space-gated prune)"
-for i in $(seq 47); do nix run .#zfs-replicate >/dev/null 2>&1; done
-N="$(zfs list -t snapshot -H -o name drill-primary/nextcloud | awk '/sync-/{n++} END{print n+0}')"
-[ "$N" -eq 48 ] || fail "prune clamp wrong (found $N)"
-zfs list -t snapshot -H -o name drill-primary/nextcloud | tail -1 | grep -aq 'sync-' \
-  || fail "newest sync snapshot missing"
-ok "prune clamped to floor ($N snapshots)"
+step "retention: Sanoid prunes to the GFS policy"
+# plant 30 historical hourlies and one very old snapshot of each other tier;
+# sanoid must keep at most 24 hourlies and drop all 2020 tier snapshots
+for i in $(seq 1 30); do
+  ts="$(date -d "-$i hours" +%Y-%m-%d_%H:%M:%S)"
+  zfs snapshot "drill-primary/nextcloud@autosnap_${ts}_hourly"
+done
+for t in daily weekly monthly; do
+  zfs snapshot "drill-primary/nextcloud@autosnap_2020-01-01_00:00:00_$t"
+done
+nix run .#zfs-replicate
+H="$(zfs list -t snapshot -H -o name drill-primary/nextcloud | awk '/@autosnap_.*_hourly$/{n++} END{print n+0}')"
+# 24-hour window plus the hourly snapshot this run just took
+[ "$H" -le 25 ] || fail "sanoid kept $H hourlies (policy 24)"
+OLD="$(zfs list -t snapshot -H -o name drill-primary/nextcloud | awk '/@autosnap_2020-/{n++} END{print n+0}')"
+[ "$OLD" -eq 0 ] || fail "sanoid kept $OLD old tier snapshots"
+HREP="$(zfs list -t snapshot -H -o name drill-backup/nextcloud-data | awk '/@autosnap_.*_hourly$/{n++} END{print n+0}')"
+[ "$HREP" -le 25 ] || fail "replica kept $HREP hourlies"
+OREP="$(zfs list -t snapshot -H -o name drill-backup/nextcloud-data | awk '/@autosnap_2020-/{n++} END{print n+0}')"
+[ "$OREP" -eq 0 ] || fail "replica kept $OREP old tier snapshots"
+ok "GFS retention enforced on source and replica ($H hourlies)"
 
 step "interim archive bind is live before retirement"
 systemctl start nextcloud-archive-bind.service

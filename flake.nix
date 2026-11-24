@@ -596,9 +596,32 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       replicaDataset = "${zfsPoolBackup}/nextcloud-data";
       replicaMount = "/var/backups/zfs-replica";
       arcMax = "8589934592"; # 8G of 30G RAM
-      zfsKeepSnapshots = "48"; # snapshot floor per dataset (never pruned below)
-      primaryPruneMinFree = "161061273600"; # 150 GiB: prune primary history only below this
-      replicaPruneMinFree = "107374182400"; # 100 GiB: prune replica history only below this
+      # GFS snapshot policy (Sanoid). One snapshot per period, so the counts
+      # are also the time windows: 24h of hourlies, 7d dailies, 4w weeklies,
+      # 3 months of monthlies. Sanoid takes the tier snapshots itself and
+      # prunes each tier to its count (it does not promote one tier into the
+      # next); Syncoid mirrors the resulting set to the backup pool.
+      zfsKeepHourly = "24";
+      zfsKeepDaily = "7";
+      zfsKeepWeekly = "4";
+      zfsKeepMonthly = "3";
+      sanoidConfig = pkgs.writeTextDir "sanoid.conf" ''
+        [template_gfs]
+            frequently = 0
+            hourly = ${zfsKeepHourly}
+            daily = ${zfsKeepDaily}
+            weekly = ${zfsKeepWeekly}
+            monthly = ${zfsKeepMonthly}
+            yearly = 0
+            autosnap = yes
+            autoprune = yes
+
+        [${zfsPoolPrimary}/nextcloud]
+            use_template = gfs
+
+        [${resticDataset}]
+            use_template = gfs
+      '';
       # archive import (plan of record): copy the archive dataset into a
       # service user's folder and group-share it; completes with import-complete
       archiveOwner = "archive";
@@ -1235,8 +1258,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         $CONFIG['preview_max_x'] = 2048;
         $CONFIG['preview_max_y'] = 2048;
         $CONFIG['jpeg_quality'] = 60;
-        $CONFIG['trashbin_retention_obligation']  = 'disabled'; // trash persists until manually expunged
-        $CONFIG['versions_retention_obligation']  = 'disabled'; // file versions persist until manually purged
+        // user-facing restore window: keep every deleted file for at least 30
+        // days, then delete it (30, 30 -> no space-pressure early expiry)
+        $CONFIG['trashbin_retention_obligation']  = '30, 30';
+        // bound version growth: keep edits for at least 30 days, delete after 90
+        $CONFIG['versions_retention_obligation']  = '30, 90';
         file_put_contents($configFile, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n");
         chmod($configFile, 0640);
         echo "nextcloud-apply-config: OK\n";
@@ -1389,6 +1415,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         install -m 0644 ${backupTimer}   ${unitDir}/nextcloud-backup.timer
         install -m 0644 ${snapshotService} ${unitDir}/nextcloud-snapshot.service
         install -m 0644 ${snapshotTimer} ${unitDir}/nextcloud-snapshot.timer
+        install -m 0644 ${zfsSyncService} ${unitDir}/nextcloud-sync.service
+        install -m 0644 ${zfsSyncTimer} ${unitDir}/nextcloud-sync.timer
         install -m 0644 ${redisUnit} ${unitDir}/nextcloud-redis.service
         install -m 0644 ${provisionService} ${unitDir}/nextcloud-provision.service
         install -m 0644 ${archiveBindService} ${unitDir}/nextcloud-archive-bind.service
@@ -1449,7 +1477,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         systemctl restart nextcloud-fpm.service
         systemctl restart nextcloud-caddy.service
         systemctl restart nextcloud-init.service
-        systemctl restart nextcloud-backup.timer nextcloud-snapshot.timer
+        systemctl restart nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-sync.timer
         systemctl restart nextcloud-provision.service
 
         echo "== enabling services =="
@@ -1461,6 +1489,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           nextcloud-init.service \
           nextcloud-backup.timer \
           nextcloud-snapshot.timer \
+          nextcloud-sync.timer \
           nextcloud-cron.timer
         # the interim archive bind exists only before nc-archive-retire; after
         # retirement the imported copy is native NC content, so a deploy must
@@ -1507,7 +1536,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         echo
         echo "== stack status =="
         for u in nextcloud-db nextcloud-fpm nextcloud-caddy nextcloud-init \
-                 nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer; do
+                 nextcloud-cron.timer nextcloud-backup.timer nextcloud-snapshot.timer \
+                 nextcloud-sync.timer; do
           printf "  %-28s %s\n" "$u" "$(systemctl is-active "$u")"
         done
         echo
@@ -1923,8 +1953,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           nix run .#occ -- maintenance:mode --on >/dev/null 2>&1 || true
           nix run .#apply-config >/dev/null 2>&1 || true
           systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-init \
-            nextcloud-backup.timer nextcloud-snapshot.timer \
-            nextcloud-provision.service nextcloud-cron.timer 2>/dev/null || true
+            nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-sync.timer \
+            nextcloud-sync.service nextcloud-provision.service nextcloud-cron.timer 2>/dev/null || true
           SAVED="${backupRoot}/pre-zfs-datadir-$(date +%Y%m%d-%H%M%S).tar.gz"
           tar czf "$SAVED" -C /var/lib/nextcloud data
           echo "primary: datadir safety tar at $SAVED"
@@ -1997,11 +2027,17 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         zfs snapshot -r ${zfsPoolPrimary}@seed-$TS
         echo "backup: seeding replica via zfs send/receive"
         # -o mountpoint keeps each replica out of the primary's mountpoints
-        # (sent properties would otherwise aim it at the live datadir/archive/repo)
+        # (sent properties would otherwise aim it at the live datadir/repo)
         zfs send -R ${zfsPoolPrimary}/nextcloud@seed-$TS \
           | zfs receive -F -o mountpoint=${replicaMount}/nextcloud-data ${replicaDataset}
-        zfs send -R ${zfsPoolPrimary}/archive@seed-$TS \
-          | zfs receive -F -o mountpoint=${replicaMount}/archive ${zfsPoolBackup}/archive
+        # the interim archive is gone once nc-archive-retire ran; a re-seed on
+        # such a host must not try to send a dataset that no longer exists
+        if zfs list -H -o name ${archiveDataset} >/dev/null 2>&1; then
+          zfs send -R ${archiveDataset}@seed-$TS \
+            | zfs receive -F -o mountpoint=${replicaMount}/archive ${zfsPoolBackup}/archive
+        else
+          echo "backup: ${archiveDataset} retired — seeding nextcloud + restic only"
+        fi
         zfs send -R ${resticDataset}@seed-$TS \
           | zfs receive -F -o mountpoint=${resticReplicaMount} ${resticReplica}
         FB="$(find ${replicaMount}/nextcloud-data -type f 2>/dev/null | wc -l)"
@@ -2016,94 +2052,98 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       zfsReplicate = pkgs.writeShellScriptBin "zfs-replicate" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        export PATH="/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+        # a manual run (or the previous timer tick) must not overlap this one:
+        # syncoid has no lock of its own, and a long send can outlive the hour
+        exec 9>/run/nextcloud-sync.lock
+        flock -n 9 || { echo "replicate: another sync is already running — skipping"; exit 0; }
+
         zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolPrimary} \
-          || { echo "primary pool missing" >&2; exit 1; }
-        zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolBackup} \
-          || { echo "backup pool missing" >&2; exit 1; }
-        STAMP="sync-$(date +%Y%m%d%H%M%S)"
-        # manual + timer runs can land in the same second — never collide
-        # (all replicated dataset snapshots checked)
-        while zfs list -H -o name "${zfsPoolPrimary}/nextcloud@$STAMP" >/dev/null 2>&1 \
-          || zfs list -H -o name "${archiveDataset}@$STAMP" >/dev/null 2>&1 \
-          || zfs list -H -o name "${resticDataset}@$STAMP" >/dev/null 2>&1; do
-          sleep 1
-          STAMP="sync-$(date +%Y%m%d%H%M%S)"
-        done
-        PREV_NC="$(zfs list -t snapshot -o name -H -s creation ${zfsPoolPrimary}/nextcloud | tail -1 | cut -d@ -f2 || true)"
-        PREV_AR="$(zfs list -t snapshot -o name -H -s creation ${zfsPoolPrimary}/archive | tail -1 | cut -d@ -f2 || true)"
-        zfs snapshot ${zfsPoolPrimary}/nextcloud@$STAMP
-        # the archive pairs retire with nc-archive-retire — replicate skips
-        # them once gone
-        ARCHIVE_GONE=0
-        zfs list -H -o name ${archiveDataset} >/dev/null 2>&1 || ARCHIVE_GONE=1
-        PREV_AR=""
-        if [ "$ARCHIVE_GONE" = 1 ]; then
-          echo "replicate: archive datasets retired — replicating nextcloud only"
+          || { echo "replicate: primary pool missing" >&2; exit 1; }
+        findmnt -no SOURCE ${ncDataDir} 2>/dev/null | grep -qx ${ncDataset} \
+          || { echo "replicate: ${ncDataset} is not mounted at ${ncDataDir}" >&2; exit 1; }
+        if zfs list -H -o name ${resticDataset} >/dev/null 2>&1; then
+          findmnt -no SOURCE ${resticMount} 2>/dev/null | grep -qx ${resticDataset} \
+            || { echo "replicate: ${resticDataset} is not mounted at ${resticMount}" >&2; exit 1; }
         fi
-        if [ "$ARCHIVE_GONE" = 0 ]; then
-          PREV_AR="$(zfs list -t snapshot -o name -H -s creation ${archiveDataset} | tail -1 | cut -d@ -f2 || true)"
-          zfs snapshot ${archiveDataset}@$STAMP
+
+        # Sanoid owns snapshot creation + time-based GFS pruning. The cache and
+        # run dirs are recreated idempotently (the host is not NixOS, so there
+        # is no tmpfiles.d rule for them).
+        install -d -m 0700 /var/cache/sanoid /run/sanoid
+        ${pkgs.sanoid}/bin/sanoid \
+          --configdir=${sanoidConfig} \
+          --cache-dir=/var/cache/sanoid \
+          --run-dir=/run/sanoid \
+          --cron
+
+        if ! zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolBackup}; then
+          echo "replicate: backup pool missing — snapshots taken, replication skipped" >&2
+          exit 1
         fi
-        # the restic repo dataset is replicated too (it lives on primary); skip
-        # gracefully if it is absent (host whose pool predates this dataset)
-        RESTIC_GONE=0
-        zfs list -H -o name ${resticDataset} >/dev/null 2>&1 || RESTIC_GONE=1
-        PREV_RR=""
-        if [ "$RESTIC_GONE" = 0 ]; then
-          PREV_RR="$(zfs list -t snapshot -o name -H -s creation ${resticDataset} | tail -1 | cut -d@ -f2 || true)"
-          zfs snapshot ${resticDataset}@$STAMP
+
+        # Syncoid uses only the snapshots Sanoid just made (--no-sync-snap),
+        # keeps the replica's snapshot set identical to the source
+        # (--delete-target-snapshots), and must not inherit the source's
+        # mountpoint (the replica is mounted under ${replicaMount}).
+        RC=0
+        ${pkgs.sanoid}/bin/syncoid --no-sync-snap --delete-target-snapshots \
+          --recvoptions="x mountpoint" \
+          ${zfsPoolPrimary}/nextcloud ${replicaDataset} || RC=1
+
+        if zfs list -H -o name ${resticDataset} >/dev/null 2>&1; then
+          ${pkgs.sanoid}/bin/syncoid --no-sync-snap --delete-target-snapshots \
+            --recvoptions="x mountpoint" \
+            ${resticDataset} ${resticReplica} || RC=1
+        fi
+
+        # The interim archive is retired on current hosts; keep replicating it
+        # on hosts that are still in the import window (its snapshots predate
+        # Sanoid, so --no-sync-snap just ships the existing ones).
+        if zfs list -H -o name ${archiveDataset} >/dev/null 2>&1; then
+          ${pkgs.sanoid}/bin/syncoid --no-sync-snap --delete-target-snapshots \
+            --recvoptions="x mountpoint" \
+            ${archiveDataset} ${zfsPoolBackup}/archive || RC=1
         else
-          echo "replicate: ${resticDataset} missing — skipping the restic repo replica"
+          echo "replicate: archive datasets retired — not replicating them"
         fi
-        if [ -n "$PREV_NC" ]; then
-          zfs send -I ${zfsPoolPrimary}/nextcloud@$PREV_NC ${zfsPoolPrimary}/nextcloud@$STAMP \
-            | zfs receive -F -x mountpoint ${replicaDataset}
-        else
-          zfs send -R ${zfsPoolPrimary}/nextcloud@$STAMP | zfs receive -F -x mountpoint ${replicaDataset}
-        fi
-        if [ "$ARCHIVE_GONE" = 0 ]; then
-          if [ -n "$PREV_AR" ]; then
-            zfs send -I ${archiveDataset}@$PREV_AR ${archiveDataset}@$STAMP \
-              | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
-          else
-            zfs send -R ${archiveDataset}@$STAMP | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
-          fi
-        fi
-        if [ "$RESTIC_GONE" = 0 ]; then
-          if [ -n "$PREV_RR" ]; then
-            zfs send -I ${resticDataset}@$PREV_RR ${resticDataset}@$STAMP \
-              | zfs receive -F -x mountpoint ${resticReplica}
-          else
-            zfs send -R ${resticDataset}@$STAMP | zfs receive -F -x mountpoint ${resticReplica}
-          fi
-        fi
-        date -u +"%Y-%m-%dT%H:%M:%SZ snap=$STAMP" > ${primaryMount}.last-replication
-        KEEP=$(( ${zfsKeepSnapshots} ))
-        # retention is SPACE-DRIVEN: history persists while a pool has room;
-        # below its free-space floor the oldest sync snapshots are destroyed,
-        # never the newest $KEEP (those carry the replication bases)
-        prune_oldest() { # <pool> <minFreeBytes> <dataset>
-          local POOL="$1" MINFREE="$2" DS="$3" AVAIL
-          AVAIL="$(zfs get -Hp -o value avail "$POOL")"
-          if [ "$AVAIL" -ge "$MINFREE" ]; then return 0; fi
-          echo "replicate: $POOL below free-space floor ($AVAIL < $MINFREE) — pruning oldest snapshots on $DS"
-          zfs list -t snapshot -o name -H -s creation "$DS" 2>/dev/null \
-            | grep -aF '@sync' | head -n -$KEEP | cut -d@ -f2 \
-            | sort -u | while IFS= read -r s; do
-                zfs destroy "$DS@$s" 2>/dev/null || true
-              done
-        }
-        prune_oldest ${zfsPoolPrimary} ${primaryPruneMinFree} ${zfsPoolPrimary}/nextcloud
-        if [ "$ARCHIVE_GONE" = 0 ]; then
-          prune_oldest ${zfsPoolPrimary} ${primaryPruneMinFree} ${archiveDataset}
-          prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${zfsPoolBackup}/archive
-        fi
-        prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${replicaDataset}
-        if [ "$RESTIC_GONE" = 0 ]; then
-          prune_oldest ${zfsPoolPrimary} ${primaryPruneMinFree} ${resticDataset}
-          prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${resticReplica}
-        fi
-        echo "replicate: done (snap $STAMP; retention: keep $KEEP, prune only below free-space floors)"
+
+        [ "$RC" -eq 0 ] || { echo "replicate: one or more syncoid runs failed" >&2; exit 1; }
+        date -u +"%Y-%m-%dT%H:%M:%SZ" > ${primaryMount}.last-replication
+        echo "replicate: done (sanoid ${zfsKeepHourly}h/${zfsKeepDaily}d/${zfsKeepWeekly}w/${zfsKeepMonthly}m; replica ${replicaDataset} + ${resticReplica})"
+      '';
+
+      zfsSyncService = pkgs.writeText "nextcloud-sync.service" ''
+        [Unit]
+        Description=Nextcloud ZFS snapshots + replication (Nix-managed)
+        After=zfs-mount.service
+        Wants=zfs-mount.service
+        # the timer is installed everywhere, but only a live ZFS datadir needs
+        # this job; an un-migrated or unmounted host is skipped cleanly
+        ConditionPathIsMountPoint=${ncDataDir}
+
+        [Service]
+        Type=oneshot
+        ExecStart=${zfsReplicate}/bin/zfs-replicate
+        # a full re-seed / long incremental send must not be killed by the
+        # default startup timeout; the wrapper's flock keeps ticks serialized
+        TimeoutStartSec=0
+        Nice=10
+        IOSchedulingClass=idle
+      '';
+
+      zfsSyncTimer = pkgs.writeText "nextcloud-sync.timer" ''
+        [Unit]
+        Description=Hourly Nextcloud ZFS snapshot + replication (Nix-managed)
+
+        [Timer]
+        OnCalendar=hourly
+        RandomizedDelaySec=5m
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
       '';
 
       zfsVerifyMigration = pkgs.writeShellScriptBin "zfs-verify-migration" ''
@@ -2173,7 +2213,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         fi
 
         echo "restic-migrate: stopping backup timers to freeze the repo"
-        systemctl stop nextcloud-backup.timer nextcloud-snapshot.timer 2>/dev/null || true
+        systemctl stop nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-sync.timer nextcloud-sync.service 2>/dev/null || true
 
         install -d -o ${ncUser} -g ${ncUser} -m 0700 "$DEST_REPO"
         echo "restic-migrate: copying $SRC_REPO -> $DEST_REPO"
@@ -2198,7 +2238,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         [ -e "$SRC_PASS" ] && mv "$SRC_PASS" "''${SRC_PASS}.pre-zfs-$TS" || true
         echo "restic-migrate: done — legacy repo kept at ''${SRC_REPO}.pre-zfs-$TS (delete once happy)"
 
-        systemctl start nextcloud-backup.timer nextcloud-snapshot.timer 2>/dev/null || true
+        systemctl start nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-sync.timer 2>/dev/null || true
       '';
 
       # repair: peel the duplicate archive mount layers the pre-fix bind unit
@@ -2260,6 +2300,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         zpool status -v 2>/dev/null | head -24 || true
         echo "== datasets =="
         zfs list 2>/dev/null || true
+        echo "== snapshot policy (Sanoid GFS) =="
+        echo "hourly=${zfsKeepHourly} daily=${zfsKeepDaily} weekly=${zfsKeepWeekly} monthly=${zfsKeepMonthly}"
         echo "== snapshots (last 12) =="
         zfs list -t snapshot -o name,creation -s creation 2>/dev/null | tail -12 || true
         echo "== datadir mount =="

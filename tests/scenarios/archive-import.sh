@@ -51,11 +51,11 @@ expect_equal 1 \
   "folder named from the file span on disk (Archive 2007-2024)"
 [ "$(find '/var/lib/nextcloud/data/archive/files/Archive 2007-2024' -type f | wc -l)" -eq 4 ] \
   || fail "expected 4 imported files (3 txt + the synthetic mjpeg mov)"
-grep -aF "'trashbin_retention_obligation' => 'disabled'" /var/lib/nextcloud/config/config.php >/dev/null \
-  || fail "trashbin retention not disabled in config.php"
-grep -aF "'versions_retention_obligation' => 'disabled'" /var/lib/nextcloud/config/config.php >/dev/null \
-  || fail "versions retention not disabled in config.php"
-ok "copy, computed name, and retention config verified"
+grep -aF "'trashbin_retention_obligation' => '30, 30'" /var/lib/nextcloud/config/config.php >/dev/null \
+  || fail "trashbin retention not set to 30/30 in config.php"
+grep -aF "'versions_retention_obligation' => '30, 90'" /var/lib/nextcloud/config/config.php >/dev/null \
+  || fail "versions retention not set to 30/90 in config.php"
+ok "copy, computed name, and time-based retention config verified"
 
 step "import: filecache rows"
 PGBIN="$(nix build .#postgresql --no-link --print-out-paths | tail -1)"

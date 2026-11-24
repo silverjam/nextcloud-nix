@@ -19,6 +19,8 @@ flake.nix ──nix build──▶ /nix/store/…-nextcloud-34.0.6   (webroot, i
             ─▶ nextcloud-caddy (port 55555 → webroot + fastcgi)
             ─▶ nextcloud-init (oneshot: db, install, config.php)
             ─▶ nextcloud-cron.timer (background jobs every 5 min)
+            ─▶ nextcloud-snapshot.timer (hourly restic db/app-state snapshot)
+            ─▶ nextcloud-sync.timer (hourly Sanoid GFS snapshots + Syncoid replica)
 ```
 
 ## Data locations
@@ -280,16 +282,16 @@ each phase refuses without the previous stamp. The destructive recipes
 matching `CONFIRM` is set** — without it they print the exact commands they
 would run (extracted from the script's own `APPLY` block, so the plan can
 never drift from the code) and change nothing. After Phase 2, `just sync-data`
-becomes snapshot +
-incremental `zfs send/receive` into `backup/nextcloud-data` (48 snapshots
-retained), replacing the retired rsync mirror; `just zfs-check` reports pools,
-datasets, mounts and the last replication time.
+takes Sanoid's GFS snapshots of the datadir (and the restic repo) and mirrors
+them into the backup pool with Syncoid. `nextcloud-sync.timer` runs the same
+job automatically every hour; `just zfs-check` reports pools, datasets, mounts,
+the snapshot set and the last replication time.
 
 Phase 2 also creates `primary/restic` (mounted at `/var/backups/restic`) — the
 dataset the restic repo lives on, so it no longer fills the root SSD. Because
 it lives on primary it joins the replication set: the Phase-3 seed and every
-`zfs-replicate` run mirror it to `backup/restic`, giving the repo the same
-redundancy as the user data. The deploy reconciles the dataset too (for hosts
+hourly sync mirror it to `backup/restic`, giving the repo the same redundancy
+as the user data. The deploy reconciles the dataset too (for hosts
 whose primary pool predates this change), and `just zfs-restic-migrate` copies
 an existing root-disk repo onto it (idempotent; the source is kept until the
 copy verifies). Once the migration and import have run for a while, the
@@ -372,10 +374,18 @@ peels every bind layer at the datadir path and every duplicate layer at
 `/mnt/archive`, keeping the bottom dataset mount; it is idempotent (a healthy
 host is a no-op). Run it from a shell that is not `cd`'ed into the archive.
 
-Retention is space-driven end to end: NC trash and file versions never
-auto-expire (`*_retention_obligation = disabled`), and snapshot history on
-both pools is pruned only below a free-space floor (150 GiB primary, 100 GiB
-replica), never below the newest 48 sync snapshots.
+Retention is time-based end to end. Nextcloud keeps deleted files in the
+trash for at least 30 days and removes them after 30
+(`trashbin_retention_obligation = '30, 30'`); file versions are kept for at
+least 30 days and removed after 90 (`versions_retention_obligation = '30, 90'`).
+ZFS snapshots follow Sanoid's GFS policy: 24 hourly, 7 daily, 4 weekly and 3
+monthly snapshots per dataset (`primary/nextcloud` and `primary/restic`).
+Sanoid takes a separate snapshot for each tier (daily at 23:59, weekly on
+Monday, monthly on the 1st) and prunes each tier to its count; it does not
+literally promote the oldest hourly into the next tier, but the retained set
+has the same GFS shape. It runs on the hourly `nextcloud-sync.timer`; Syncoid
+mirrors the resulting set to the backup pool and deletes target-only
+snapshots, so both pools always carry the same snapshot names.
 
 ### ffmpeg and the music app
 
@@ -547,14 +557,14 @@ onto a fresh instance.
 
 **User file data (`/var/lib/nextcloud/data`) is deliberately NOT in these
 archives.** It is protected by ZFS instead: the datadir lives on the
-`primary/nextcloud` dataset and `zfs-replicate` mirrors it (and the archive) to
-the backup pool — whole-dataset rollback plus a second copy, but no
-application-level history. Replication is on demand today (`just sync-data`):
-nothing schedules it yet, so an unattended host's replica only advances when
-someone runs it (see `TODO.md`). See "Storage: migrating to ZFS". (The old hourly
-`rsync` data mirror was retired: it duplicated the file tree onto the root SSD
-and added nothing the ZFS replica and Nextcloud's never-expiring trash did not
-already cover. `nix run .#deploy` tears down its units; the leftover tree
+`primary/nextcloud` dataset; Sanoid takes the GFS snapshots and Syncoid mirrors
+them (plus the restic repo) to the backup pool — whole-dataset rollback plus a
+second copy, but no application-level history. `nextcloud-sync.timer` runs this
+hourly, and `just sync-data` runs it now. See "Storage: migrating to ZFS". (The
+old hourly `rsync` data mirror was retired: it duplicated the file tree onto
+the root SSD and added nothing the ZFS replica and Nextcloud's own
+trash/versions already cover. `nix run .#deploy` tears down its units;
+the leftover tree
 (`/var/backups/nextcloud/data`) is deleted by the gated `nc-data-sync-purge`
 recipe — `CONFIRM=mirror`, and only after the `migration-complete` stamp.)
 
@@ -564,7 +574,9 @@ recipe — `CONFIRM=mirror`, and only after the `migration-complete` stamp.)
   downtime. "Incremental" = restic chunk-dedup across consecutive dumps (only
   changed DB blocks get stored); a true WAL-archiving/PITR setup is the
   follow-up if you need minute-level DB recovery.
-- Retention (in flake.nix): hourly ×24, daily ×14, weekly ×6, monthly ×6.
+- **ZFS snapshots + replication** (`nextcloud-sync.timer`, hourly): Sanoid
+  takes the GFS tiers and Syncoid mirrors them to the backup pool.
+- Restic retention (in flake.nix): hourly ×24, daily ×14, weekly ×6, monthly ×6.
 - Repo: on the **ZFS `primary` pool**, dataset `primary/restic` mounted at
   `/var/backups/restic` (repo in `.../repo`, passphrase in `.../.restic-pass`,
   mode 0600). Keeping the repo off the root SSD is deliberate: it grows without
@@ -580,7 +592,7 @@ recipe — `CONFIRM=mirror`, and only after the `migration-complete` stamp.)
 ```bash
 just backup                 # full now (brief maintenance:mode)
 just snapshot               # incremental now (no downtime)
-just sync-data              # snapshot + replicate data/ to the backup pool now
+just sync-data              # Sanoid snapshots + Syncoid replicate now
 just backup-list            # snapshots, ids, dedup size
 just backup-validate        # latest dump readable? (extract + pg_restore TOC)
 just backup-validate-deep   # latest dump FULLY restores? (scratch db, dropped)

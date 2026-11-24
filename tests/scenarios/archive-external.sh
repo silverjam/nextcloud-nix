@@ -37,11 +37,11 @@ nix run .#nc-archive-share
 PW="$(grep -ah '^uid=jason password=' /var/lib/nextcloud/provision-credentials-*.log 2>/dev/null \
   | sed -E 's/^[^ ]+ password=([^ ]+).*/\1/' | tail -1)"
 [ -n "$PW" ] || fail "jason credentials not found"
-grep -aF "'trashbin_retention_obligation' => 'disabled'" /var/lib/nextcloud/config/config.php >/dev/null \
-  || fail "trash retention not disabled in config.php"
-grep -aF "'versions_retention_obligation' => 'disabled'" /var/lib/nextcloud/config/config.php >/dev/null \
-  || fail "versions retention not disabled in config.php"
-ok "retention config present in config.php"
+grep -aF "'trashbin_retention_obligation' => '30, 30'" /var/lib/nextcloud/config/config.php >/dev/null \
+  || fail "trash retention not set to 30/30 in config.php"
+grep -aF "'versions_retention_obligation' => '30, 90'" /var/lib/nextcloud/config/config.php >/dev/null \
+  || fail "versions retention not set to 30/90 in config.php"
+ok "time-based retention config present in config.php"
 
 step "share: member visibility + delete-through-UI"
 PGBIN="$(nix build .#postgresql --no-link --print-out-paths | tail -1)"
