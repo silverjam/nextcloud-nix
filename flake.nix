@@ -303,6 +303,11 @@
               "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares/$i" >/dev/null 2>&1 || true
           done
         fi
+        # the unit's ExecStop unmounted the bind; drop the now-empty mountpoint
+        # so the retired folder cannot linger in the archive user's files
+        if ! findmnt -no SOURCE "${archiveBindWhere}" >/dev/null 2>&1; then
+          rmdir "${archiveBindWhere}" 2>/dev/null || true
+        fi
         echo "retire: destroying ${archiveDataset} and the replica pair"
         # mounted datasets refuse destroy — unmount first (the /mnt/archive
         # machine mount disappears with the dataset's own mountpoint)
@@ -621,6 +626,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         [Unit]
         Description=Nextcloud archive dataset bind-mounted into the datadir (interim, read-only in practice)
         ConditionPathIsDirectory=${archiveSource}
+        # after nc-archive-retire the dataset (and the reason for this bind) is
+        # gone — never let a deploy or boot resurrect an empty
+        # "Archive (Read only)" folder in the archive user's files
+        ConditionPathExists=!${migrationState}/archive-retired
         # the bind lands INSIDE the archive user's home — the account must
         # exist first (its creation refuses when the home already holds files)
         # Requires pulls init AND provision into the transaction (After only
@@ -1446,7 +1455,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         echo "== enabling services =="
         systemctl enable --now \
           nextcloud-redis.service \
-          nextcloud-archive-bind.service \
           nextcloud-db.service \
           nextcloud-fpm.service \
           nextcloud-caddy.service \
@@ -1454,6 +1462,16 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           nextcloud-backup.timer \
           nextcloud-snapshot.timer \
           nextcloud-cron.timer
+        # the interim archive bind exists only before nc-archive-retire; after
+        # retirement the imported copy is native NC content, so a deploy must
+        # not bind the (now empty) archive source back into the archive user's
+        # files or recreate the "Archive (Read only)" mountpoint
+        if [ -f ${migrationState}/archive-retired ]; then
+          systemctl disable --now nextcloud-archive-bind.service 2>/dev/null || true
+          rmdir "${archiveBindWhere}" 2>/dev/null || true
+        else
+          systemctl enable --now nextcloud-archive-bind.service
+        fi
 
         echo "== ffmpeg + p7zip (nix env) + music app =="
         # the music app installs from the NC app store: platform versioning

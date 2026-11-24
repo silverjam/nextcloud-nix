@@ -156,6 +156,13 @@ zfs list -t snapshot -H -o name drill-primary/nextcloud | tail -1 | grep -aq 'sy
   || fail "newest sync snapshot missing"
 ok "prune clamped to floor ($N snapshots)"
 
+step "interim archive bind is live before retirement"
+systemctl start nextcloud-archive-bind.service
+findmnt -no SOURCE "/var/lib/nextcloud/data/archive/files/Archive (Read only)" \
+  | grep -qx drill-primary/archive \
+  || fail "archive bind did not mount drill-primary/archive"
+ok "interim archive bind mounted"
+
 step "retirement: gated destroy of the archive datasets (replicate adapts)"
 MS=/var/backups/nextcloud/migration-state
 mkdir -p "$MS"
@@ -181,6 +188,15 @@ CONFIRM=retire-archive nix run .#nc-archive-retire 2>&1 >/dev/null | tail -4
 zfs list -H -o name drill-primary/archive >/dev/null 2>&1 \
   && fail "frozen archive dataset survived retirement"
 [ -f "$MS/archive-retired" ] || fail "archive-retired stamp missing"
+[ ! -e "/var/lib/nextcloud/data/archive/files/Archive (Read only)" ] \
+  || fail "retired bind mountpoint still present"
+# the unit's ConditionPathExists=!.../archive-retired must keep a manual
+# start (and therefore a later deploy) from recreating the empty bind
+systemctl start nextcloud-archive-bind.service 2>/dev/null || true
+[ ! -e "/var/lib/nextcloud/data/archive/files/Archive (Read only)" ] \
+  || fail "post-retire bind start recreated the mountpoint"
+systemctl is-active --quiet nextcloud-archive-bind.service \
+  && fail "bind unit active after retirement"
 REP="$(nix run .#zfs-replicate 2>&1 || true)"
 echo "$REP" | tail -3
 echo "$REP" | grep -aq 'archive datasets retired' \
