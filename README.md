@@ -532,8 +532,10 @@ onto a fresh instance.
 **User file data (`/var/lib/nextcloud/data`) is deliberately NOT in these
 archives.** It is protected by ZFS instead: the datadir lives on the
 `primary/nextcloud` dataset and `zfs-replicate` mirrors it (and the archive) to
-the backup pool hourly — whole-dataset rollback plus a second copy, but no
-application-level history. See "Storage: migrating to ZFS". (The old hourly
+the backup pool — whole-dataset rollback plus a second copy, but no
+application-level history. Replication is on demand today (`just sync-data`):
+nothing schedules it yet, so an unattended host's replica only advances when
+someone runs it (see `TODO.md`). See "Storage: migrating to ZFS". (The old hourly
 `rsync` data mirror was retired: it duplicated the file tree onto the root SSD
 and added nothing the ZFS replica and Nextcloud's never-expiring trash did not
 already cover. `nix run .#deploy` tears down its units; the leftover tree
