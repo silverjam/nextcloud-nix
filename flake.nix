@@ -1301,6 +1301,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # units are no longer shipped, but an existing host still has them
         # enabled and would keep copying data/ onto the root disk
         systemctl disable --now nextcloud-data-sync.timer 2>/dev/null || true
+        # disabling the timer does NOT kill a run the timer already started,
+        # and one full mirror pass can run for hours (re-filling the root disk
+        # the whole time) — stop the in-flight service instance too
+        systemctl stop nextcloud-data-sync.service 2>/dev/null || true
+        systemctl reset-failed nextcloud-data-sync.service 2>/dev/null || true
         rm -f ${unitDir}/nextcloud-data-sync.service ${unitDir}/nextcloud-data-sync.timer
 
         echo "== backup roots =="
