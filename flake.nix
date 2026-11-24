@@ -1297,6 +1297,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         if ! findmnt -no SOURCE "${ncDataDir}/${archiveOwner}/files/Archive" >/dev/null 2>&1; then
           rm -rf "${ncDataDir}/${archiveOwner}/files/Archive" 2>/dev/null || true
         fi
+        # retire the rsync data mirror (idempotent; safe on fresh hosts) — the
+        # units are no longer shipped, but an existing host still has them
+        # enabled and would keep copying data/ onto the root disk
+        systemctl disable --now nextcloud-data-sync.timer 2>/dev/null || true
+        rm -f ${unitDir}/nextcloud-data-sync.service ${unitDir}/nextcloud-data-sync.timer
 
         echo "== backup roots =="
         install -d -o ${ncUser} -g ${ncUser} -m 0700 ${backupRoot} ${stashRoot}
