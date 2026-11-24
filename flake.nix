@@ -203,19 +203,26 @@
       zfsDisasterRemove = pkgs.writeShellScriptBin "zfs-disaster-mirror-remove" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
+        # the dry run prints the real commands from this very file (the block
+        # between the APPLY markers) instead of restating them, so the plan
+        # can never drift from what would actually run
+        print_apply() {
+          awk '/^[[:space:]]*# >>> APPLY[[:space:]]*$/{f=1; next} /^[[:space:]]*# <<< APPLY[[:space:]]*$/{f=0} f' "$0" | sed -e 's/^[[:space:]]*//'
+        }
         test -f ${migrationState}/migration-complete \
           || { echo "refusing: migration-complete stamp missing (run zfs-verify-migration first)" >&2; exit 1; }
         test -f ${migrationState}/import-complete \
           || { echo "refusing: import-complete stamp missing (finish nc-import-archive first)" >&2; exit 1; }
         if [ "''${CONFIRM:-}" != "disaster" ]; then
           echo "DRY RUN — nothing was changed. Set CONFIRM=disaster to proceed." >&2
-          echo "would remove the disaster mirror (the sdc1 second copy): ${disasterMirror}"
-          echo "reclaiming its space on / ($(df -h / | tail -1 | awk '{print $4}') free now)"
-          echo "surviving copies: ${zfsPoolPrimary} + ${zfsPoolBackup} (and the verified archive import)"
+          echo "would run:"
+          print_apply
           exit 0
         fi
+        # >>> APPLY
         rm -rf "${disasterMirror}"
         echo "disaster mirror removed — $(df -h / | tail -1 | awk '{print $4}') free on /"
+        # <<< APPLY
       '';
 
       # purge the retired rsync mirror tree (${backupRoot}/data) — a root-disk
@@ -226,6 +233,10 @@
       ncDataSyncPurge = pkgs.writeShellScriptBin "nc-data-sync-purge" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
+        # dry run prints the real commands from this file (APPLY markers)
+        print_apply() {
+          awk '/^[[:space:]]*# >>> APPLY[[:space:]]*$/{f=1; next} /^[[:space:]]*# <<< APPLY[[:space:]]*$/{f=0} f' "$0" | sed -e 's/^[[:space:]]*//'
+        }
         MIRROR="${backupRoot}/data"
         [ -d "$MIRROR" ] || { echo "nothing to do: $MIRROR does not exist"; exit 0; }
         # a live timer would re-create the tree, and a running pass must not be
@@ -241,17 +252,25 @@
         if [ "''${CONFIRM:-}" != "mirror" ]; then
           echo "DRY RUN — nothing was changed. Set CONFIRM=mirror to proceed." >&2
           echo "would delete the retired rsync mirror tree: $MIRROR (including its .trash)"
-          echo "surviving copy: the ZFS replica ${replicaDataset} ($(df -h / | tail -1 | awk '{print $4}') free on / now)"
+          echo "surviving copy: the ZFS replica ${replicaDataset}"
+          echo "would run:"
+          print_apply
           exit 0
         fi
+        # >>> APPLY
         SZ="$(du -sh "$MIRROR" 2>/dev/null | cut -f1 || true)"
         rm -rf "$MIRROR"
         echo "mirror removed (freed ~''${SZ:-?}) — $(df -h / | tail -1 | awk '{print $4}') free on /"
+        # <<< APPLY
       '';
 
       ncArchiveRetire = pkgs.writeShellScriptBin "nc-archive-retire" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
+        # dry run prints the real commands from this file (APPLY markers)
+        print_apply() {
+          awk '/^[[:space:]]*# >>> APPLY[[:space:]]*$/{f=1; next} /^[[:space:]]*# <<< APPLY[[:space:]]*$/{f=0} f' "$0" | sed -e 's/^[[:space:]]*//'
+        }
         # gates: option B must be imported and verified, then a typed confirm
         test -f ${migrationState}/migration-complete \
           || { echo "refusing: migration-complete missing (run zfs-verify-migration first)" >&2; exit 1; }
@@ -259,13 +278,15 @@
           || { echo "refusing: import-complete missing (finish nc-import-archive first — this destroys the frozen pre-NC copy)" >&2; exit 1; }
         if [ "''${CONFIRM:-}" != "retire-archive" ]; then
           echo "DRY RUN — nothing was changed. Set CONFIRM=retire-archive to proceed." >&2
-          echo "would, in order:"
-          echo "  1. disable nextcloud-archive-bind.service (and unmount the interim bind)"
-          echo "  2. delete the interim member shares on '/${archiveBindMountName}'"
-          echo "  3. destroy ${archiveDataset} + ${zfsPoolBackup}/archive, including all their snapshots"
-          echo "surviving copy: the verified option-B tree under ${ncDataDir}/${archiveOwner}/files (import-complete is stamped)"
+          echo "# would run, in order:"
+          echo "#   1. disable nextcloud-archive-bind.service (and unmount the interim bind)"
+          echo "#   2. delete the interim member shares on '/${archiveBindMountName}'"
+          echo "#   3. destroy ${archiveDataset} + ${zfsPoolBackup}/archive, including all their snapshots"
+          echo "# surviving copy: the verified option-B tree under ${ncDataDir}/${archiveOwner}/files (import-complete is stamped)"
+          print_apply
           exit 0
         fi
+        # >>> APPLY
         # retire the interim bind first (its dataset is about to disappear)
         systemctl disable --now nextcloud-archive-bind.service 2>/dev/null || true
         # retire the interim member shares, scoped to the interim folder only
@@ -292,6 +313,7 @@
         zfs destroy -r ${zfsPoolBackup}/archive 2>/dev/null || true
         touch ${migrationState}/archive-retired
         echo "retire: done — replication skips the archive datasets from now on; space reclaimed as the pools free lazily"
+        # <<< APPLY
       '';
 
       ncTranscodeUnplayable = pkgs.writeShellScriptBin "nc-transcode-unplayable" ''
@@ -1809,6 +1831,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       zfsCreatePrimary = pkgs.writeShellScriptBin "zfs-create-primary" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
+        # dry run prints the real commands from this file (APPLY markers)
+        print_apply() {
+          awk '/^[[:space:]]*# >>> APPLY[[:space:]]*$/{f=1; next} /^[[:space:]]*# <<< APPLY[[:space:]]*$/{f=0} f' "$0" | sed -e 's/^[[:space:]]*//'
+        }
         # sudo env_reset strips PATH and the nix feature flags the tail needs
         export PATH="/nix/var/nix/profiles/default/bin:$PATH"
         export NIX_CONFIG="experimental-features = nix-command flakes"
@@ -1830,13 +1856,14 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # and stop unless the operator typed the CONFIRM
         if [ "''${CONFIRM:-}" != "primary" ]; then
           echo "DRY RUN — nothing was changed. Set CONFIRM=primary to proceed." >&2
-          echo "would:"
-          echo "  1. destroy ${primaryDisk} (sdc1 NTFS) and create the ${zfsPoolPrimary} pool"
-          echo "  2. import the sdc1 content into ${zfsPoolPrimary}/nextcloud + ${archiveDataset}"
-          echo "  3. move the live datadir ${ncDataDir} onto ${zfsPoolPrimary}/nextcloud"
-          echo "verified second copy: ${disasterMirror} ($(find ${disasterMirror} -type f 2>/dev/null | wc -l) files)"
+          echo "# would: destroy ${primaryDisk} (sdc1 NTFS), create the ${zfsPoolPrimary} pool,"
+          echo "# move the live datadir ${ncDataDir} onto ${zfsPoolPrimary}/nextcloud and"
+          echo "# import the sdc1 content into ${zfsPoolPrimary}/nextcloud + ${archiveDataset}"
+          echo "# verified second copy: ${disasterMirror} ($(find ${disasterMirror} -type f 2>/dev/null | wc -l) files)"
+          print_apply
           exit 0
         fi
+        # >>> APPLY
         # device triple-check
         test -b "${primaryDisk}" || { echo "no such device: ${primaryDisk} — reconnect sdc1" >&2; exit 1; }
         # nix bakes model/minsize at eval time; sandbox runs skip identity checks
@@ -1911,21 +1938,28 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         install -d -m 0755 ${migrationState}
         touch ${migrationState}/phase2-complete
         echo "primary: phase-2 complete — NC is live on the zfs datadir; personal archive at /mnt/archive"
+        # <<< APPLY
       '';
 
       zfsCreateBackup = pkgs.writeShellScriptBin "zfs-create-backup" ''
         set -euo pipefail
         [ "$(id -u)" -eq 0 ] || exec sudo CONFIRM="''${CONFIRM:-}" "$0" "$@"
+        # dry run prints the real commands from this file (APPLY markers)
+        print_apply() {
+          awk '/^[[:space:]]*# >>> APPLY[[:space:]]*$/{f=1; next} /^[[:space:]]*# <<< APPLY[[:space:]]*$/{f=0} f' "$0" | sed -e 's/^[[:space:]]*//'
+        }
         test -f ${migrationState}/phase2-complete \
           || { echo "refusing: phase-2 stamp missing (run zfs-create-primary first)" >&2; exit 1; }
         # dry run by default (everything above is read-only)
         if [ "''${CONFIRM:-}" != "backup" ]; then
           echo "DRY RUN — nothing was changed. Set CONFIRM=backup to proceed." >&2
-          echo "would destroy ${backupDisk} (sdb1 NTFS mirror) and create the ${zfsPoolBackup} pool,"
-          echo "then seed ${zfsPoolBackup}/nextcloud-data, ${zfsPoolBackup}/archive and ${resticReplica}"
-          echo "from the verified ${zfsPoolPrimary} datasets"
+          echo "# would destroy ${backupDisk} (sdb1 NTFS mirror), create the ${zfsPoolBackup} pool,"
+          echo "# then seed ${zfsPoolBackup}/nextcloud-data, ${zfsPoolBackup}/archive and ${resticReplica}"
+          echo "# from the verified ${zfsPoolPrimary} datasets"
+          print_apply
           exit 0
         fi
+        # >>> APPLY
         test -b "${backupDisk}" || { echo "no such device: ${backupDisk} — reconnect sdb1" >&2; exit 1; }
         if findmnt -S "${backupDisk}" >/dev/null 2>&1; then
           echo "refusing: ${backupDisk} is mounted" >&2; exit 1
@@ -1958,6 +1992,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         echo "backup: restic repo replicated -> ${resticReplica} (mountpoint ${resticReplicaMount})"
         touch ${migrationState}/phase3-complete
         echo "backup: phase-3 complete — replica seeded on the backup drive"
+        # <<< APPLY
       '';
 
       zfsReplicate = pkgs.writeShellScriptBin "zfs-replicate" ''

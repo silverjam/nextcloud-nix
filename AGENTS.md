@@ -156,9 +156,16 @@ verified against real failures during the ZFS migration (Nov 2026).
 3. **Retire/destroy flows** carry a stamped precondition chain
    (`migration-complete` -> `import-complete` -> `archive-retired`) and a
    typed `CONFIRM=...` gate that is **dry-run by default**: without the
-   CONFIRM the recipe prints the plan (stdout) plus one
+   CONFIRM the recipe prints the exact commands it would run — extracted from
+   the recipe's own `# >>> APPLY` / `# <<< APPLY` block via
+   `awk ... "$0"` (never a restated paraphrase, so the plan cannot drift) — on
+   stdout, plus one
    `DRY RUN — nothing was changed. Set CONFIRM=<word> to proceed.` line on
    stderr, and exits 0 having touched nothing. The stderr line is deliberate —
    the scenarios capture stderr (`2>&1 >/dev/null`) and grep it for
-   `CONFIRM`. Nothing destructive is automated, and recipes umount before
+   `CONFIRM`; the command list goes to stdout so it stays pipeable. Note the
+   `awk` markers must be anchored (`^[[:space:]]*# >>> APPLY[[:space:]]*$`) —
+   an unanchored pattern also matches the helper's own `awk` line, which sits
+   *before* the start marker, and the extraction then prints everything from
+   there. Nothing destructive is automated, and recipes umount before
    `zfs destroy`.

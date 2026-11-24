@@ -84,6 +84,8 @@ umount /mnt/primary /mnt/backup 2>/dev/null || true
 step "dry run: create-primary without CONFIRM touches nothing"
 OUT="$(nix run .#zfs-create-primary 2>&1)"
 echo "$OUT" | grep -aq 'DRY RUN' || fail "create-primary did not dry-run (got: $OUT)"
+echo "$OUT" | grep -aq 'zpool create -f.*drill-primary' \
+  || fail "create-primary dry run did not print the real zpool create (got: $OUT)"
 zpool list -H -o name 2>/dev/null | grep -qx drill-primary && fail "dry run created the pool"
 ok "create-primary is inert without CONFIRM"
 CONFIRM=primary nix run .#zfs-create-primary
@@ -104,6 +106,8 @@ step "phase 3: backup zfs pool + replica seed"
 step "dry run: create-backup without CONFIRM touches nothing"
 OUT="$(nix run .#zfs-create-backup 2>&1)"
 echo "$OUT" | grep -aq 'DRY RUN' || fail "create-backup did not dry-run (got: $OUT)"
+echo "$OUT" | grep -aq 'zfs send -R drill-primary/nextcloud' \
+  || fail "create-backup dry run did not print the real seed (got: $OUT)"
 zpool list -H -o name 2>/dev/null | grep -qx drill-backup && fail "dry run created the backup pool"
 ok "create-backup is inert without CONFIRM"
 CONFIRM=backup nix run .#zfs-create-backup
@@ -161,6 +165,12 @@ touch "$MS/import-complete"
 ERR="$(nix run .#nc-archive-retire 2>&1 >/dev/null || true)"
 echo "$ERR" | grep -aq 'CONFIRM' \
   || fail "retire ran without CONFIRM (got: $ERR)"
+# the dry run prints the real destroy commands, not a paraphrase
+PLAN="$(nix run .#nc-archive-retire 2>/dev/null || true)"
+echo "$PLAN" | grep -aq 'zfs destroy -r drill-primary/archive' \
+  || fail "retire dry run did not print the real destroy (got: $PLAN)"
+echo "$PLAN" | grep -aq 'zfs destroy -r drill-backup/archive' \
+  || fail "retire dry run did not print the replica destroy (got: $PLAN)"
 zfs list -H -o name drill-primary/archive >/dev/null 2>&1 \
   || fail "dry run destroyed the archive dataset"
 [ ! -f "$MS/archive-retired" ] || fail "dry run stamped archive-retired"
