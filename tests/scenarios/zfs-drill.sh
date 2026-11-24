@@ -286,6 +286,114 @@ REP="$(nix run .#zfs-replicate 2>&1 || true)"
 [ -n "$REP" ] || fail "replicate failed after retirement"
 ok "retire gated+executed, replicate adapts"
 
+step "disaster recovery: promote the backup replica"
+# Put a known file into the NC datadir, scan it, and sync before pretending
+# the primary pool is gone. The DB/config stay on the root disk; this is the
+# real "primary pool failed" recovery: the backup pool must be able to serve
+# the Nextcloud datadir, and the replicated restic repo must restore the DB.
+marker="replica-promotion-$(date +%s)"
+printf '%s\n' "$marker" > /var/lib/nextcloud/data/admin/files/replica-promotion.txt
+chown nextcloud:nextcloud /var/lib/nextcloud/data/admin/files/replica-promotion.txt
+nix run .#occ -- files:scan admin >/dev/null
+# Sanoid may already have taken this hour's snapshot; take an explicit
+# marker snapshot so Syncoid has a source snapshot containing the file.
+zfs snapshot "drill-primary/nextcloud@promotion-$(date +%s)"
+nix run .#zfs-replicate
+
+systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-init \
+  nextcloud-cron.timer nextcloud-cron.service nextcloud-sync.timer \
+  nextcloud-sync.service nextcloud-backup.timer nextcloud-snapshot.timer \
+  nextcloud-backup.service nextcloud-snapshot.service 2>/dev/null || true
+umount /var/lib/nextcloud/data
+umount /var/backups/restic
+umount /drill-primary 2>/dev/null || true
+zpool export drill-primary
+if zpool list -H -o name 2>/dev/null | grep -qx drill-primary; then
+  fail "primary pool still present after export"
+fi
+ok "primary pool exported (simulated failure)"
+
+# promote the backup datadir to the live path (zfs set mountpoint can
+# auto-mount, so only mount explicitly if it is still unmounted)
+umount /var/backups/zfs-replica/nextcloud-data
+zfs set mountpoint=/var/lib/nextcloud/data drill-backup/nextcloud-data
+if ! findmnt -no SOURCE /var/lib/nextcloud/data | grep -qx drill-backup/nextcloud-data; then
+  zfs mount drill-backup/nextcloud-data
+fi
+findmnt -no SOURCE /var/lib/nextcloud/data | grep -qx drill-backup/nextcloud-data \
+  || fail "replica datadir not mounted at /var/lib/nextcloud/data"
+
+systemctl start nextcloud-fpm nextcloud-caddy
+out=""
+for _ in $(seq 1 30); do
+  out="$(curl -s -m 5 "$BASE_URL/status.php" || true)"
+  echo "$out" | grep -q '"installed":true' && break
+  sleep 1
+done
+echo "$out" | grep -q '"installed":true' \
+  || fail "NC did not serve from the promoted replica ($out)"
+login_test "$(cat /var/lib/nextcloud/admin-password)"
+grep -qx "$marker" /var/lib/nextcloud/data/admin/files/replica-promotion.txt \
+  || fail "promoted replica is missing the synced marker file"
+PW="$(cat /var/lib/nextcloud/admin-password)"
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -u "admin:$PW" -X PROPFIND \
+  -H 'Depth: 0' "$BASE_URL/remote.php/dav/files/admin/replica-promotion.txt")"
+[ "$CODE" = "207" ] || fail "promoted replica file not served over DAV (HTTP $CODE)"
+ok "NC serves user data from the backup replica"
+
+# the replicated restic repo is a real backup, not just a dataset copy:
+# restore the DB dump from it into a scratch database and check the marker
+NCB="$(nix build .#nc-backup --no-link --print-out-paths | tail -1)/bin/nc-backup"
+RESTIC="$(grep -oE '/nix/store/[^ ]+-restic-[^/]+/bin/restic' "$NCB" | head -1)"
+[ -x "$RESTIC" ] || fail "restic binary not found in the nc-backup build"
+RREPO=/var/backups/zfs-replica/restic/repo
+RPASS=/var/backups/zfs-replica/restic/.restic-pass
+"$RESTIC" -r "$RREPO" --password-file "$RPASS" snapshots --compact >/dev/null \
+  || fail "restic replica repo is not readable"
+RDIR="$W/restic-replica-restore"
+mkdir -p "$RDIR"
+"$RESTIC" -r "$RREPO" --password-file "$RPASS" restore latest --target "$RDIR" \
+  --include /var/backups/nextcloud/staging/nextcloud.dump
+chmod -R a+rX "$RDIR"
+DUMP="$RDIR/var/backups/nextcloud/staging/nextcloud.dump"
+[ -s "$DUMP" ] || fail "no nextcloud.dump restored from the restic replica"
+SCR="nc_dr_$(date +%s)"
+runuser -u nextcloud -- "$PGBIN/bin/createdb" -h /run/nextcloud-db -U nextcloud "$SCR"
+if ! runuser -u nextcloud -- "$PGBIN/bin/pg_restore" --host=/run/nextcloud-db \
+     --username=nextcloud --dbname="$SCR" --jobs=2 "$DUMP"; then
+  runuser -u nextcloud -- "$PGBIN/bin/dropdb" -h /run/nextcloud-db -U nextcloud "$SCR" || true
+  fail "pg_restore from the restic replica failed"
+fi
+M="$(runuser -u nextcloud -- "$PGBIN/bin/psql" -h /run/nextcloud-db -U nextcloud \
+  -d "$SCR" -tAc "SELECT count(*) FROM oc_preferences WHERE userid='admin' AND appid='upgradetest' AND configkey='zfsdrill'")"
+[ "$M" = "1" ] || fail "restored DB from replica lost the drill marker (got $M)"
+runuser -u nextcloud -- "$PGBIN/bin/dropdb" -h /run/nextcloud-db -U nextcloud "$SCR"
+rm -rf "$RDIR"
+ok "restic replica restores the DB dump (marker verified)"
+
+# put the real primary back and leave the stack healthy for the final verify
+systemctl stop nextcloud-fpm nextcloud-caddy
+umount /var/lib/nextcloud/data
+zfs set mountpoint=/var/backups/zfs-replica/nextcloud-data drill-backup/nextcloud-data
+if ! findmnt -no SOURCE /var/backups/zfs-replica/nextcloud-data | grep -qx drill-backup/nextcloud-data; then
+  zfs mount drill-backup/nextcloud-data
+fi
+# the sandbox pool lives on a loop device, which zpool import does not
+# discover by name; point it at the vdev explicitly
+zpool import -d "$LOA" drill-primary
+zfs mount -a
+findmnt -no SOURCE /var/lib/nextcloud/data | grep -qx drill-primary/nextcloud \
+  || fail "primary datadir not restored after the promotion drill"
+systemctl start nextcloud-fpm nextcloud-caddy
+out=""
+for _ in $(seq 1 30); do
+  out="$(curl -s -m 5 "$BASE_URL/status.php" || true)"
+  echo "$out" | grep -q '"installed":true' && break
+  sleep 1
+done
+echo "$out" | grep -q '"installed":true' \
+  || fail "NC did not recover after restoring the primary pool ($out)"
+ok "primary pool restored; replica mountpoint restored"
 
 step "final verify-migration + teardown"
 nix run .#zfs-verify-migration

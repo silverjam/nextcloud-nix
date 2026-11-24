@@ -310,7 +310,11 @@ VM** against throwaway hardware: two loopfile NTFS "drives" (labels `Data` /
 drill pools (`drill-primary`/`drill-backup`), the live Nextcloud datadir
 actually moved onto ZFS and back. It exercises the disaster mirror, interlock
 stamps, CONFIRM gates, replica seeding, incremental replication, the
-migration-complete stamp, and restores the instance afterwards.
+migration-complete stamp, and restores the instance afterwards. It also proves
+the recovery path: it exports the primary pool, promotes the backup replica to
+the live datadir, serves Nextcloud from it (admin login + DAV access to a
+synced marker), restores the DB dump from the replicated restic repo into a
+scratch database, then restores the primary pool and runs the final verify.
 
 - Needs KVM + the ZFS kernel module **inside the guest** (installed by the
   scenario) — runs host-local only; intentionally **not** in the CI matrix
