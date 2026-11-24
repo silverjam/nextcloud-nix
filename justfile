@@ -69,6 +69,10 @@ zfs-check:
 zfs-verify-migration:
     nix run .#zfs-verify-migration
 
+# move an existing root-disk restic repo onto the ZFS backup pool (idempotent)
+zfs-restic-migrate:
+    nix run .#zfs-restic-migrate
+
 nc-import-archive:
     nix run .#nc-import-archive
 

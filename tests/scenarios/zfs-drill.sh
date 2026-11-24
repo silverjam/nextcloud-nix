@@ -44,8 +44,10 @@ cleanup() {
 }
 
 step "sandbox: loopfile NTFS drives"
-truncate -s 300M "$W/drive-a.img"
-truncate -s 300M "$W/drive-b.img"
+# 1G, not 300M: the primary pool now also holds the restic repo, and the
+# app-state archive (store-apps) is ~190M — a real backup needs the room
+truncate -s 1G "$W/drive-a.img"
+truncate -s 1G "$W/drive-b.img"
 LOA="$(losetup --find --show "$W/drive-a.img")"
 LOB="$(losetup --find --show "$W/drive-b.img")"
 mkfs.ntfs -f -L Data "$LOA" >/dev/null
@@ -104,6 +106,16 @@ test -f /var/backups/zfs-replica/archive/personal-legacy.txt \
   || fail "nextcloud datadir replica empty"
 ok "replica seeded + personal file replicated"
 
+step "restic repo lives on the primary pool (off the root disk)"
+zfs list -H -o name drill-primary/restic >/dev/null 2>&1 \
+  || fail "primary/restic dataset missing"
+findmnt -no SOURCE /var/backups/restic | grep -qx drill-primary/restic \
+  || fail "restic dataset not mounted at /var/backups/restic"
+nix run .#nc-backup -- incremental >/dev/null
+test -e /var/backups/restic/repo/config \
+  || fail "restic repo not initialised on primary/restic"
+ok "restic repo lives on drill-primary/restic"
+
 step "replication: two runs (full + incremental)"
 nix run .#zfs-replicate
 # awk counts: grep -c exits 1 on zero matches and set -e kills the script
@@ -112,6 +124,13 @@ nix run .#zfs-replicate
 NEW_SNAPS="$(zfs list -t snapshot -H -o name 2>/dev/null | awk '/nextcloud@sync-/{n++} END{print n+0}')"
 [ "$NEW_SNAPS" -gt "$PREV_SNAPS" ] || fail "snapshots not accumulating"
 ok "replication applying + snapshot history keeping"
+
+step "restic repo replicated to the backup pool"
+zfs list -H -o name drill-backup/restic >/dev/null 2>&1 \
+  || fail "backup/restic replica dataset missing"
+test -e /var/backups/zfs-replica/restic/repo/config \
+  || fail "restic repo not replicated to the backup pool"
+ok "restic repo has a send/receive replica on drill-backup/restic"
 
 step "retention: syncs clamp to the keep-48 floor (space-gated prune)"
 for i in $(seq 47); do nix run .#zfs-replicate >/dev/null 2>&1; done

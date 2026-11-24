@@ -45,15 +45,40 @@
       # See README section "Backups & restore".
       # ------------------------------------------------------------------
       backupRoot = "/var/backups/nextcloud";
-      resticRepo = "${backupRoot}/repo";
+      # The restic repository + passphrase live on the ZFS **primary** pool
+      # (dataset `primary/restic`), not the root SSD: the repo grew without
+      # bound on / and crowded the system disk. Living on primary also puts it
+      # inside the replication set, so zfs-replicate keeps a send/receive
+      # replica of the repo on the backup pool (backup/restic) — the repo then
+      # has the same redundancy as the user data. The passphrase rides with the
+      # repo so losing the root disk can never strand it; `zfs-restic-migrate`
+      # moves a pre-existing root-disk repo in. backupRoot itself stays on root
+      # for the interlock stamps, the disaster mirror and pre-zfs safety tars
+      # (all must survive pool loss).
+      resticDataset = "${zfsPoolPrimary}/restic"; # live repo (replicated)
+      resticMount = "/var/backups/restic"; # its mountpoint
+      resticReplica = "${zfsPoolBackup}/restic"; # send/receive replica
+      resticReplicaMount = "${replicaMount}/restic"; # replica mountpoint
+      resticRepo = "${resticMount}/repo";
+      # root-disk fallback (containers/VM drills, un-migrated hosts)
+      resticRepoFallback = "${backupRoot}/repo";
+      # Resolve the restic base dir at runtime: prefer the mounted ZFS dataset,
+      # else fall back to the root-disk location. Sets RESTIC_REPOSITORY and
+      # RESTIC_PASSWORD_FILE (used by nc-backup + nc-restore). The pg_dump
+      # staging dir deliberately stays on the root disk so the absolute paths
+      # stored inside existing archives never change.
+      resticBaseSh = ''
+        RESTIC_BASE="${backupRoot}"
+        if findmnt -no SOURCE "${resticMount}" 2>/dev/null | grep -qx "${resticDataset}"; then
+          RESTIC_BASE="${resticMount}"
+        fi
+        export RESTIC_REPOSITORY="$RESTIC_BASE/repo"
+        export RESTIC_PASSWORD_FILE="$RESTIC_BASE/.restic-pass"
+      '';
       stashRoot = "${backupRoot}/staging"; # per-run pg_dump staging
       # same dump path as stored inside archives (no leading slash) — used by
       # restic restore --include during validation
       stashRelDump = lib.removePrefix "/" "${stashRoot}/nextcloud.dump";
-      passFile = "${backupRoot}/.restic-pass"; # auto-generated, 0600; repo is
-                                           # encrypted but nobody types this.
-                                           # Outside ncRoot so `just reset`
-                                           # never strands the repo.
       keepHourly = "24";
       keepDaily = "14";
       keepWeekly = "6";
@@ -1283,8 +1308,22 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         fi
 
         echo "== backup roots =="
-        install -d -o ${ncUser} -g ${ncUser} -m 0700 \
-          ${backupRoot} ${resticRepo} ${stashRoot}
+        install -d -o ${ncUser} -g ${ncUser} -m 0700 ${backupRoot} ${stashRoot}
+        # restic repo lives on the ZFS primary pool (replicated to backup):
+        # create its dataset once the pool exists (idempotent; no-op on
+        # un-migrated hosts and in the container/VM drills, which have no zfs).
+        # Falls back to the root-disk location until then.
+        if command -v zfs >/dev/null 2>&1 \
+             && zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolPrimary} \
+             && ! zfs list -H -o name ${resticDataset} >/dev/null 2>&1; then
+          echo "deploy: creating restic dataset ${resticDataset} (mountpoint ${resticMount})"
+          zfs create -o mountpoint=${resticMount} ${resticDataset}
+        fi
+        if findmnt -no SOURCE ${resticMount} 2>/dev/null | grep -qx ${resticDataset}; then
+          install -d -o ${ncUser} -g ${ncUser} -m 0700 ${resticMount} ${resticRepo}
+        else
+          install -d -o ${ncUser} -g ${ncUser} -m 0700 ${resticRepoFallback}
+        fi
         # Nix bakes dataSyncTarget at eval time — shellcheck sees literals
         # where these guard the "disabled" knob (empty string).
         # shellcheck disable=SC2157
@@ -1398,20 +1437,30 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         export HOME=${ncRoot}
         export NEXTCLOUD_CONFIG_DIR=${ncConfig}
         export XDG_CACHE_HOME=${ncRoot}/cache
-        export RESTIC_REPOSITORY=${resticRepo}
-        export RESTIC_PASSWORD_FILE=${passFile}
+        ${resticBaseSh}
+
+        # never silently start a fresh repo on the pool while a real one still
+        # sits on the root disk (e.g. deploy created the dataset but the repo
+        # was not migrated yet) — that would strand the whole backup history
+        if [ "$RESTIC_BASE" != "${backupRoot}" ] \
+             && [ ! -e "$RESTIC_REPOSITORY/config" ] \
+             && [ -e "${backupRoot}/repo/config" ]; then
+          echo "nc-backup: a restic repo exists at ${backupRoot}/repo but the pool repo is empty" >&2
+          echo "nc-backup: run 'just zfs-restic-migrate' to move it onto the pool first" >&2
+          exit 1
+        fi
 
         OCC() { ${phpEnv}/bin/php ${nc}/occ "$@"; }
 
-        mkdir -p "${backupRoot}" "${resticRepo}" "${stashRoot}"
-        chmod 0700 "${backupRoot}" "${stashRoot}"
-        if [ ! -s "${passFile}" ]; then
-          ${pkgs.openssl}/bin/openssl rand -hex 32 > "${passFile}"
-          chmod 0600 "${passFile}"
-          echo "nc-backup: generated restic password file ${passFile}"
+        mkdir -p "${backupRoot}" "$RESTIC_REPOSITORY" "${stashRoot}"
+        chmod 0700 "${backupRoot}" "${stashRoot}" "$RESTIC_BASE"
+        if [ ! -s "$RESTIC_PASSWORD_FILE" ]; then
+          ${pkgs.openssl}/bin/openssl rand -hex 32 > "$RESTIC_PASSWORD_FILE"
+          chmod 0600 "$RESTIC_PASSWORD_FILE"
+          echo "nc-backup: generated restic password file $RESTIC_PASSWORD_FILE"
         fi
-        if [ ! -e "${resticRepo}/config" ]; then
-          echo "nc-backup: initialising restic repository at ${resticRepo}"
+        if [ ! -e "$RESTIC_REPOSITORY/config" ]; then
+          echo "nc-backup: initialising restic repository at $RESTIC_REPOSITORY"
           ${restic}/bin/restic init
         fi
 
@@ -1540,8 +1589,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
 
         mkdir -p "$EXTRACT"
         echo "== extracting archive -> $EXTRACT =="
-        env RESTIC_REPOSITORY=${resticRepo} RESTIC_PASSWORD_FILE=${passFile} \
-          ${restic}/bin/restic restore "$SNAP" --target "$EXTRACT"
+        ${resticBaseSh}
+        ${restic}/bin/restic restore "$SNAP" --target "$EXTRACT"
 
         SRCNC="$EXTRACT/var/lib/nextcloud"
         DUMP="$EXTRACT${stashRoot}/nextcloud.dump"
@@ -1755,7 +1804,9 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         PrivateTmp=true
         ProtectSystem=strict
         ProtectHome=true
-        ReadWritePaths=${ncRoot} ${backupRoot}
+        # restic repo may live on the ZFS backup pool (-: tolerate absent path
+        # on un-migrated hosts / drills without zfs)
+        ReadWritePaths=${ncRoot} ${backupRoot} -${resticMount}
         RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
       '';
 
@@ -1791,7 +1842,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         PrivateTmp=true
         ProtectSystem=strict
         ProtectHome=true
-        ReadWritePaths=${ncRoot} ${backupRoot}
+        ReadWritePaths=${ncRoot} ${backupRoot} -${resticMount}
         RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
       '';
 
@@ -1891,6 +1942,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           echo "primary: restoring nc datadir from the safety tar"
           tar xzf "$SAVED" -C /var/lib/nextcloud
         fi
+        # restic repo dataset (idempotent — covers the resume path too)
+        zfs list -H -o name ${resticDataset} >/dev/null 2>&1 \
+          || zfs create -o mountpoint=${resticMount} ${resticDataset}
+        install -d -o ${ncUser} -g ${ncUser} -m 0700 ${resticMount}
         chown -R nextcloud:nextcloud /var/lib/nextcloud/data
         echo "primary: importing personal content from $ARCHIVE_SRC -> /mnt/archive"
         rsync -aH --numeric-ids --info=progress2 \
@@ -1925,18 +1980,26 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         zpool create -f -o ashift=12 -O compression=on -O xattr=sa \
           -O acltype=posixacl -O atime=off \
           -O mountpoint=${replicaMount} ${zfsPoolBackup} "${backupDisk}"
+        # ensure the restic repo dataset exists on primary before the recursive
+        # seed snapshot — it is part of the replication set now
+        zfs list -H -o name ${resticDataset} >/dev/null 2>&1 \
+          || zfs create -o mountpoint=${resticMount} ${resticDataset}
+        install -d -o ${ncUser} -g ${ncUser} -m 0700 ${resticMount}
         TS="$(date +%Y%m%d%H%M%S)"
         zfs snapshot -r ${zfsPoolPrimary}@seed-$TS
         echo "backup: seeding replica via zfs send/receive"
-        # -o mountpoint keeps the replica out of the primary's mountpoints
-        # (sent properties would otherwise aim it at the live datadir/archive)
+        # -o mountpoint keeps each replica out of the primary's mountpoints
+        # (sent properties would otherwise aim it at the live datadir/archive/repo)
         zfs send -R ${zfsPoolPrimary}/nextcloud@seed-$TS \
           | zfs receive -F -o mountpoint=${replicaMount}/nextcloud-data ${replicaDataset}
         zfs send -R ${zfsPoolPrimary}/archive@seed-$TS \
           | zfs receive -F -o mountpoint=${replicaMount}/archive ${zfsPoolBackup}/archive
+        zfs send -R ${resticDataset}@seed-$TS \
+          | zfs receive -F -o mountpoint=${resticReplicaMount} ${resticReplica}
         FB="$(find ${replicaMount}/nextcloud-data -type f 2>/dev/null | wc -l)"
         FA="$(find ${replicaMount}/archive -type f 2>/dev/null | wc -l)"
         echo "backup: replica files: nextcloud-data=$FB archive=$FA"
+        echo "backup: restic repo replicated -> ${resticReplica} (mountpoint ${resticReplicaMount})"
         touch ${migrationState}/phase3-complete
         echo "backup: phase-3 complete — replica seeded on the backup drive"
       '';
@@ -1950,9 +2013,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           || { echo "backup pool missing" >&2; exit 1; }
         STAMP="sync-$(date +%Y%m%d%H%M%S)"
         # manual + timer runs can land in the same second — never collide
-        # (both dataset snapshots checked)
+        # (all replicated dataset snapshots checked)
         while zfs list -H -o name "${zfsPoolPrimary}/nextcloud@$STAMP" >/dev/null 2>&1 \
-          || zfs list -H -o name "${archiveDataset}@$STAMP" >/dev/null 2>&1; do
+          || zfs list -H -o name "${archiveDataset}@$STAMP" >/dev/null 2>&1 \
+          || zfs list -H -o name "${resticDataset}@$STAMP" >/dev/null 2>&1; do
           sleep 1
           STAMP="sync-$(date +%Y%m%d%H%M%S)"
         done
@@ -1971,6 +2035,17 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           PREV_AR="$(zfs list -t snapshot -o name -H -s creation ${archiveDataset} | tail -1 | cut -d@ -f2 || true)"
           zfs snapshot ${archiveDataset}@$STAMP
         fi
+        # the restic repo dataset is replicated too (it lives on primary); skip
+        # gracefully if it is absent (host whose pool predates this dataset)
+        RESTIC_GONE=0
+        zfs list -H -o name ${resticDataset} >/dev/null 2>&1 || RESTIC_GONE=1
+        PREV_RR=""
+        if [ "$RESTIC_GONE" = 0 ]; then
+          PREV_RR="$(zfs list -t snapshot -o name -H -s creation ${resticDataset} | tail -1 | cut -d@ -f2 || true)"
+          zfs snapshot ${resticDataset}@$STAMP
+        else
+          echo "replicate: ${resticDataset} missing — skipping the restic repo replica"
+        fi
         if [ -n "$PREV_NC" ]; then
           zfs send -I ${zfsPoolPrimary}/nextcloud@$PREV_NC ${zfsPoolPrimary}/nextcloud@$STAMP \
             | zfs receive -F -x mountpoint ${replicaDataset}
@@ -1983,6 +2058,14 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
               | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
           else
             zfs send -R ${archiveDataset}@$STAMP | zfs receive -F -x mountpoint ${zfsPoolBackup}/archive
+          fi
+        fi
+        if [ "$RESTIC_GONE" = 0 ]; then
+          if [ -n "$PREV_RR" ]; then
+            zfs send -I ${resticDataset}@$PREV_RR ${resticDataset}@$STAMP \
+              | zfs receive -F -x mountpoint ${resticReplica}
+          else
+            zfs send -R ${resticDataset}@$STAMP | zfs receive -F -x mountpoint ${resticReplica}
           fi
         fi
         date -u +"%Y-%m-%dT%H:%M:%SZ snap=$STAMP" > ${primaryMount}.last-replication
@@ -2007,6 +2090,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${zfsPoolBackup}/archive
         fi
         prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${replicaDataset}
+        if [ "$RESTIC_GONE" = 0 ]; then
+          prune_oldest ${zfsPoolPrimary} ${primaryPruneMinFree} ${resticDataset}
+          prune_oldest ${zfsPoolBackup} ${replicaPruneMinFree} ${resticReplica}
+        fi
         echo "replicate: done (snap $STAMP; retention: keep $KEEP, prune only below free-space floors)"
       '';
 
@@ -2028,6 +2115,81 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         touch ${migrationState}/migration-complete
         echo "migration verified — the disaster mirror stays as the second copy until the archive
         # import completes; removal stays manual and gated (CONFIRM=disaster)"
+      '';
+
+      # Move a pre-existing (root-disk) restic repo + passphrase onto the ZFS
+      # primary-pool dataset (which zfs-replicate then mirrors to the backup
+      # pool). Idempotent, non-destructive: the source is kept (renamed) until
+      # the copy verifies. Needs the dataset mounted (run the migration +
+      # a deploy first).
+      zfsResticMigrate = pkgs.writeShellScriptBin "zfs-restic-migrate" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        export PATH="/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+        # create the dataset on demand (existing primary pool, pre-dates this
+        # recipe) so `just zfs-restic-migrate` works standalone
+        if command -v zfs >/dev/null 2>&1 \
+             && zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolPrimary} \
+             && ! zfs list -H -o name ${resticDataset} >/dev/null 2>&1; then
+          echo "restic-migrate: creating dataset ${resticDataset} (mountpoint ${resticMount})"
+          zfs create -o mountpoint=${resticMount} ${resticDataset}
+          install -d -o ${ncUser} -g ${ncUser} -m 0700 ${resticMount}
+        fi
+
+        findmnt -no SOURCE ${resticMount} 2>/dev/null | grep -qx ${resticDataset} \
+          || { echo "refusing: ${resticDataset} not mounted at ${resticMount} (finish the migration + deploy first)" >&2; exit 1; }
+
+        TS="$(date +%Y%m%d-%H%M%S)"
+        DEST_REPO=${resticMount}/repo
+        SRC_REPO=${backupRoot}/repo
+        DEST_PASS=${resticMount}/.restic-pass
+        SRC_PASS=${backupRoot}/.restic-pass
+
+        if [ ! -e "$SRC_REPO/config" ]; then
+          echo "restic-migrate: no legacy repo at $SRC_REPO — nothing to migrate"
+          echo "(a deploy initialises the pool repo on the next backup run)"
+          exit 0
+        fi
+        if [ -e "$DEST_REPO/config" ]; then
+          DEST_N="$(env RESTIC_REPOSITORY="$DEST_REPO" RESTIC_PASSWORD_FILE="$DEST_PASS" \
+            ${restic}/bin/restic snapshots --compact 2>/dev/null \
+            | grep -cE '^[0-9a-f]{8}' || true)"
+          if [ "$DEST_N" != "0" ]; then
+            echo "restic-migrate: repo already on the pool ($DEST_REPO, $DEST_N snapshots) — nothing to do"
+            exit 0
+          fi
+          echo "restic-migrate: pool repo is empty — moving it aside before the copy"
+          mv "$DEST_REPO" "''${DEST_REPO}.empty-$TS"
+        fi
+
+        echo "restic-migrate: stopping backup timers to freeze the repo"
+        systemctl stop nextcloud-backup.timer nextcloud-snapshot.timer 2>/dev/null || true
+
+        install -d -o ${ncUser} -g ${ncUser} -m 0700 "$DEST_REPO"
+        echo "restic-migrate: copying $SRC_REPO -> $DEST_REPO"
+        ${pkgs.rsync}/bin/rsync -a "$SRC_REPO/" "$DEST_REPO/"
+        if [ -s "$SRC_PASS" ]; then
+          install -m 0600 "$SRC_PASS" "$DEST_PASS"
+        fi
+
+        echo "restic-migrate: verifying the copied repo"
+        OLD_N="$(env RESTIC_REPOSITORY="$SRC_REPO" RESTIC_PASSWORD_FILE="$SRC_PASS" \
+          ${restic}/bin/restic snapshots --compact 2>/dev/null \
+          | grep -cE '^[0-9a-f]{8}' || true)"
+        NEW_N="$(env RESTIC_REPOSITORY="$DEST_REPO" RESTIC_PASSWORD_FILE="$DEST_PASS" \
+          ${restic}/bin/restic snapshots --compact \
+          | grep -cE '^[0-9a-f]{8}' || true)"
+        [ "$OLD_N" = "$NEW_N" ] \
+          || { echo "restic-migrate: snapshot count mismatch ($OLD_N -> $NEW_N) — source kept; investigate" >&2; exit 1; }
+        echo "restic-migrate: verified $NEW_N snapshots readable from the pool repo"
+
+        chown -R ${ncUser}:${ncUser} "$DEST_REPO" "$DEST_PASS" 2>/dev/null || true
+        mv "$SRC_REPO" "''${SRC_REPO}.pre-zfs-$TS"
+        [ -e "$SRC_PASS" ] && mv "$SRC_PASS" "''${SRC_PASS}.pre-zfs-$TS" || true
+        echo "restic-migrate: done — legacy repo kept at ''${SRC_REPO}.pre-zfs-$TS (delete once happy)"
+
+        systemctl start nextcloud-backup.timer nextcloud-snapshot.timer 2>/dev/null || true
       '';
 
       zfsCheck = pkgs.writeShellScriptBin "zfs-check" ''
@@ -2240,6 +2402,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         "zfs-create-backup" = zfsCreateBackup;
         "zfs-replicate" = zfsReplicate;
         "zfs-verify-migration" = zfsVerifyMigration;
+        "zfs-restic-migrate" = zfsResticMigrate;
         "nc-import-archive" = ncImportArchive;
         "nc-archive-share" = ncArchiveShare;
         "nc-archive-retire" = ncArchiveRetire;
@@ -2312,6 +2475,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
                 "${zfsCreateBackup}/bin/zfs-create-backup" \
                 "${zfsReplicate}/bin/zfs-replicate" \
                 "${zfsVerifyMigration}/bin/zfs-verify-migration" \
+                "${zfsResticMigrate}/bin/zfs-restic-migrate" \
                 "${ncImportArchive}/bin/nc-import-archive" \
                 "${ncArchiveShare}/bin/nc-archive-share" \
                 "${ncArchiveRetire}/bin/nc-archive-retire" \

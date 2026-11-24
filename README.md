@@ -274,6 +274,7 @@ just zfs-disaster-mirror-create   # 0.5: sdc1 -> root SSD + verification stamp
 just drive-umount                 # 2: recipe refuses while a drive is mounted
 CONFIRM=primary just zfs-create-primary     # 2: DESTROYS sdc1 NTFS
 just zfs-create-backup            # 3: DESTROYS sdb1 NTFS (legacy dropped)
+just zfs-restic-migrate           # 3b: move the root-disk restic repo onto primary/restic
 just zfs-verify-migration         # certifies pools, datadir, replica
 just nc-import-archive            # copy archive into NC + group share (stamps import-complete)
 just zfs-disaster-mirror-remove   # LAST: needs import-complete + CONFIRM=disaster — nothing automated
@@ -285,6 +286,15 @@ demand a typed `CONFIRM`. After Phase 2, `just sync-data` becomes snapshot +
 incremental `zfs send/receive` into `backup/nextcloud-data` (48 snapshots
 retained), replacing the rsync mirror; `just zfs-check` reports pools,
 datasets, mounts and the last replication time.
+
+Phase 2 also creates `primary/restic` (mounted at `/var/backups/restic`) — the
+dataset the restic repo lives on, so it no longer fills the root SSD. Because
+it lives on primary it joins the replication set: the Phase-3 seed and every
+`zfs-replicate` run mirror it to `backup/restic`, giving the repo the same
+redundancy as the user data. The deploy reconciles the dataset too (for hosts
+whose primary pool predates this change), and `just zfs-restic-migrate` copies
+an existing root-disk repo onto it (idempotent; the source is kept until the
+copy verifies).
 
 ### Full-pipeline rehearsal before touching real hardware
 
@@ -536,10 +546,17 @@ volume for that.
   changed DB blocks get stored); a true WAL-archiving/PITR setup is the
   follow-up if you need minute-level DB recovery.
 - Retention (in flake.nix): hourly ×24, daily ×14, weekly ×6, monthly ×6.
-- Repo: `/var/backups/nextcloud/repo` (restic repos are always encrypted;
-  the machine-managed passphrase is auto-generated at
-  `/var/backups/nextcloud/.restic-pass`, mode 0600 — keep it with the repo,
-  restores need it).
+- Repo: on the **ZFS `primary` pool**, dataset `primary/restic` mounted at
+  `/var/backups/restic` (repo in `.../repo`, passphrase in `.../.restic-pass`,
+  mode 0600). Keeping the repo off the root SSD is deliberate: it grows without
+  bound and previously crowded `/`. Living on primary also puts it in the
+  replication set, so `backup/restic` (mounted at
+  `/var/backups/zfs-replica/restic`) is a send/receive replica — the repo has
+  the same redundancy as the user data. The passphrase rides with the repo so a
+  root-disk loss can never strand it; restic repos are always encrypted. On
+  hosts without the pool (or before the migration) the jobs fall back to the
+  root-disk `/var/backups/nextcloud/repo` so containers/drills and un-migrated
+  machines keep working.
 
 ```bash
 just backup                 # full now (brief maintenance:mode)
@@ -574,7 +591,10 @@ Restore behavior has two modes:
   in state-only mode). Deleting those is manual and yours.
 
 Restoring onto a **fresh host**: run `nix run .#deploy` first (users + units),
-copy `/var/backups/nextcloud` over, then `just restore <id>`.
+then bring the repo over — either `/var/backups/nextcloud/repo` +
+`.restic-pass`, or a pool copy (`/var/backups/restic` on a primary host, or the
+`backup/restic` replica at `/var/backups/zfs-replica/restic`) — and run
+`just restore <id>`.
 
 Off-box later: point `RESTIC_REPOSITORY` at an ssh/S3 target in the flake —
 repos are format-compatible; `just backup-list` works identically remote.
