@@ -384,8 +384,10 @@ Sanoid takes a separate snapshot for each tier (daily at 23:59, weekly on
 Monday, monthly on the 1st) and prunes each tier to its count; it does not
 literally promote the oldest hourly into the next tier, but the retained set
 has the same GFS shape. It runs on the hourly `nextcloud-sync.timer`; Syncoid
-mirrors the resulting set to the backup pool and deletes target-only
-snapshots, so both pools always carry the same snapshot names.
+mirrors every snapshot created after the replica's base (the phase-3 seed)
+and deletes target-only snapshots. Snapshots older than that base are not
+backfilled; on a host seeded before the Sanoid policy starts, every Sanoid
+snapshot created afterwards is present on both pools.
 
 ### ffmpeg and the music app
 

@@ -176,27 +176,66 @@ test -e /var/backups/zfs-replica/restic/repo/config \
   || fail "restic repo not replicated to the backup pool"
 ok "restic repo has a send/receive replica on drill-backup/restic"
 
-step "retention: Sanoid prunes to the GFS policy"
-# plant 30 historical hourlies and one very old snapshot of each other tier;
-# sanoid must keep at most 24 hourlies and drop all 2020 tier snapshots
-for i in $(seq 1 30); do
-  ts="$(date -d "-$i hours" +%Y-%m-%d_%H:%M:%S)"
-  zfs snapshot "drill-primary/nextcloud@autosnap_${ts}_hourly"
+step "retention: real Sanoid GFS pruning (VM clock)"
+# Sanoid prunes by the snapshot's real ZFS creation time, not by the date
+# embedded in its name. Backdating names is therefore useless; move this
+# disposable VM's clock back, create an oversupply of genuinely old tier
+# snapshots, restore the clock, and run the real Sanoid + Syncoid job.
+R="$(nix build .#zfs-replicate --no-link --print-out-paths | tail -1)/bin/zfs-replicate"
+CFG="$(grep -oE -- '--configdir=[^ ]+' "$R" | head -1 | cut -d= -f2)"
+for p in "hourly = 24" "daily = 7" "weekly = 4" "monthly = 3"; do
+  grep -qF "$p" "$CFG/sanoid.conf" || fail "sanoid.conf lost '$p' (config $CFG)"
 done
-for t in daily weekly monthly; do
-  zfs snapshot "drill-primary/nextcloud@autosnap_2020-01-01_00:00:00_$t"
-done
+
+# no timer may fire during the clock jump
+systemctl stop nextcloud-backup.timer nextcloud-snapshot.timer \
+  nextcloud-cron.timer nextcloud-sync.timer 2>/dev/null || true
+timedatectl set-ntp false 2>/dev/null || true
+NOW="$(date +%s)"
+restore_clock() { date -s "@$NOW" >/dev/null 2>&1 || true; }
+trap restore_clock EXIT
+BACK=$((NOW - 120 * 86400))
+date -s "@$BACK" >/dev/null
+
+mk_snaps() { # <tier> <count>
+  local tier="$1" n="$2" i t ts
+  for i in $(seq 1 "$n"); do
+    t=$((BACK + i * 3600))
+    ts="$(date -d "@$t" +%Y-%m-%d_%H:%M:%S)"
+    zfs snapshot "drill-primary/nextcloud@autosnap_${ts}_${tier}"
+  done
+}
+mk_snaps hourly 30
+mk_snaps daily 10
+mk_snaps weekly 6
+mk_snaps monthly 5
+
+restore_clock
+[ "$(date +%s)" -ge "$((NOW - 60))" ] || fail "guest clock not restored"
+trap - EXIT
+timedatectl set-ntp true 2>/dev/null || true
+
+# the first sync already left one current autosnap per tier; the planted
+# oversupply is 120 days old, so Sanoid must clamp each tier to its count.
+# Syncoid only replicates snapshots newer than the replica's base (the
+# phase-3 seed), so the planted pre-base history is not backfilled; the
+# replica must still have the post-base tier snapshots from the first sync.
 nix run .#zfs-replicate
-H="$(zfs list -t snapshot -H -o name drill-primary/nextcloud | awk '/@autosnap_.*_hourly$/{n++} END{print n+0}')"
-# 24-hour window plus the hourly snapshot this run just took
-[ "$H" -le 25 ] || fail "sanoid kept $H hourlies (policy 24)"
-OLD="$(zfs list -t snapshot -H -o name drill-primary/nextcloud | awk '/@autosnap_2020-/{n++} END{print n+0}')"
-[ "$OLD" -eq 0 ] || fail "sanoid kept $OLD old tier snapshots"
-HREP="$(zfs list -t snapshot -H -o name drill-backup/nextcloud-data | awk '/@autosnap_.*_hourly$/{n++} END{print n+0}')"
-[ "$HREP" -le 25 ] || fail "replica kept $HREP hourlies"
-OREP="$(zfs list -t snapshot -H -o name drill-backup/nextcloud-data | awk '/@autosnap_2020-/{n++} END{print n+0}')"
-[ "$OREP" -eq 0 ] || fail "replica kept $OREP old tier snapshots"
-ok "GFS retention enforced on source and replica ($H hourlies)"
+for tier in hourly daily weekly monthly; do
+  case "$tier" in
+    hourly)  want=24 ;;
+    daily)   want=7 ;;
+    weekly)  want=4 ;;
+    monthly) want=3 ;;
+  esac
+  got="$(zfs list -t snapshot -H -o name drill-primary/nextcloud \
+    | awk -v t="_${tier}" '$0 ~ t"$" {n++} END{print n+0}')"
+  [ "$got" -eq "$want" ] || fail "source ${tier} count $got != $want"
+  rgot="$(zfs list -t snapshot -H -o name drill-backup/nextcloud-data \
+    | awk -v t="_${tier}" '$0 ~ t"$" {n++} END{print n+0}')"
+  [ "$rgot" -ge 1 ] || fail "replica has no ${tier} autosnap"
+done
+ok "Sanoid pruned real-aged snapshots to 24/7/4/3; replica keeps the post-base set"
 
 step "interim archive bind is live before retirement"
 systemctl start nextcloud-archive-bind.service

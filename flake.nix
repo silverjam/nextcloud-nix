@@ -2076,6 +2076,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           --configdir=${sanoidConfig} \
           --cache-dir=/var/cache/sanoid \
           --run-dir=/run/sanoid \
+          --force-update \
           --cron
 
         if ! zpool list -H -o name 2>/dev/null | grep -qx ${zfsPoolBackup}; then
