@@ -641,8 +641,9 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       ncWebUrl = "http://127.0.0.1:${webPort}";
       # NC store apps the deploy installs + enables; add an app here and a
       # deploy brings it in (the store resolves the platform-compatible
-      # version; NC 34 -> music 3.3.1, files_archive 1.3.2, memories current)
-      storeApps = [ "music" "files_archive" "memories" ];
+      # version; NC 34 -> music 3.3.1, memories current). files_archive and
+      # ebookreader are vendored below, so they are not in this store list.
+      storeApps = [ "music" "memories" ];
       storeAppsJoined = lib.concatStringsSep " " storeApps;
       # the archive manager app is vendored: the author's release tarball,
       # hash-pinned here (declared NC 33-35, so NC 34 is in range) and
@@ -1409,6 +1410,12 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           exec sudo "$0" "$@"
         fi
 
+        # Keep this activation closure alive across nix-collect-garbage: the
+        # units reference store paths from it (nc-backup, php, NC, the sync
+        # job, etc.) and those paths are not otherwise GC-rooted.
+        nix-store --add-root /nix/var/nix/gcroots/nextcloud-deploy --indirect -r "$0" \
+          || echo "warning: could not register the deploy GC root" >&2
+
         echo "== system users =="
         ensure_group() { getent group "$1" >/dev/null || groupadd --system "$1"; }
         ensure_user()  {
@@ -1421,22 +1428,24 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ensure_user ${webUser} /var/lib/${webUser}
         id -nG ${webUser} | grep -wq ${ncUser} || usermod -aG ${ncUser} ${webUser}
 
-        echo "== installing unit files =="
-        install -m 0644 ${dbUnit}        ${unitDir}/nextcloud-db.service
-        install -m 0644 ${fpmUnit}       ${unitDir}/nextcloud-fpm.service
-        install -m 0644 ${caddyUnit}     ${unitDir}/nextcloud-caddy.service
-        install -m 0644 ${initUnit}      ${unitDir}/nextcloud-init.service
-        install -m 0644 ${cronUnit}      ${unitDir}/nextcloud-cron.service
-        install -m 0644 ${cronTimer}     ${unitDir}/nextcloud-cron.timer
-        install -m 0644 ${backupService} ${unitDir}/nextcloud-backup.service
-        install -m 0644 ${backupTimer}   ${unitDir}/nextcloud-backup.timer
-        install -m 0644 ${snapshotService} ${unitDir}/nextcloud-snapshot.service
-        install -m 0644 ${snapshotTimer} ${unitDir}/nextcloud-snapshot.timer
-        install -m 0644 ${zfsSyncService} ${unitDir}/nextcloud-sync.service
-        install -m 0644 ${zfsSyncTimer} ${unitDir}/nextcloud-sync.timer
-        install -m 0644 ${redisUnit} ${unitDir}/nextcloud-redis.service
-        install -m 0644 ${provisionService} ${unitDir}/nextcloud-provision.service
-        install -m 0644 ${archiveBindService} ${unitDir}/nextcloud-archive-bind.service
+        echo "== linking unit files =="
+        # units stay read-only store artifacts; /etc holds only symlinks so
+        # edits cannot silently drift and the closure GC root covers them
+        ln -sf ${dbUnit}        ${unitDir}/nextcloud-db.service
+        ln -sf ${fpmUnit}       ${unitDir}/nextcloud-fpm.service
+        ln -sf ${caddyUnit}     ${unitDir}/nextcloud-caddy.service
+        ln -sf ${initUnit}      ${unitDir}/nextcloud-init.service
+        ln -sf ${cronUnit}      ${unitDir}/nextcloud-cron.service
+        ln -sf ${cronTimer}     ${unitDir}/nextcloud-cron.timer
+        ln -sf ${backupService} ${unitDir}/nextcloud-backup.service
+        ln -sf ${backupTimer}   ${unitDir}/nextcloud-backup.timer
+        ln -sf ${snapshotService} ${unitDir}/nextcloud-snapshot.service
+        ln -sf ${snapshotTimer} ${unitDir}/nextcloud-snapshot.timer
+        ln -sf ${zfsSyncService} ${unitDir}/nextcloud-sync.service
+        ln -sf ${zfsSyncTimer} ${unitDir}/nextcloud-sync.timer
+        ln -sf ${redisUnit} ${unitDir}/nextcloud-redis.service
+        ln -sf ${provisionService} ${unitDir}/nextcloud-provision.service
+        ln -sf ${archiveBindService} ${unitDir}/nextcloud-archive-bind.service
         # retire the pre-rename .mount unit (idempotent; safe on fresh hosts)
         systemctl disable --now var-lib-nextcloud-data-archive-files-Archive.mount 2>/dev/null || true
         # ... and drop the file, so no target can ever start it again
@@ -1532,21 +1541,26 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # the store's latest-compatible releases, upgrades via app:upgrade)
         install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
         for a in ${storeAppsJoined}; do
-          nix run .#occ -- app:install "$a" 2>&1 | tail -1 || true
-          nix run .#occ -- app:enable "$a" 2>&1 | tail -1 || true
+          ${occ}/bin/nextcloud-occ app:install "$a" 2>&1 | tail -1 || true
+          ${occ}/bin/nextcloud-occ app:enable "$a" 2>&1 | tail -1 || true
         done
         # the archive manager (vendored, hash-pinned)
-        FATA="$(nix build --no-link --print-out-paths .#files-archive-app 2>/dev/null | tail -1)"
         rm -rf ${ncStoreApps}/files_archive
-        tar xzf "$FATA" -C ${ncStoreApps}
+        tar xzf ${filesArchiveApp} -C ${ncStoreApps}
         chown -R ${ncUser}:${ncUser} ${ncStoreApps}/files_archive
-        nix run .#occ -- app:enable files_archive 2>&1 | tail -1 || true
-        # E-Book Reader (vendored: not yet in the NC app store)
-        EBRA="$(nix build --no-link --print-out-paths .#ebookreader-app 2>/dev/null | tail -1)"
+        ${occ}/bin/nextcloud-occ app:enable files_archive 2>&1 | tail -1 || true
+        # E-Book Reader (vendored, hash-pinned; store entry exists but the
+        # local app-store fetcher currently returns an empty list)
         rm -rf ${ncStoreApps}/ebookreader
-        tar xzf "$EBRA" -C ${ncStoreApps}
+        tar xzf ${ebookReaderApp} -C ${ncStoreApps}
         chown -R ${ncUser}:${ncUser} ${ncStoreApps}/ebookreader
-        nix run .#occ -- app:enable ebookreader 2>&1 | tail -1 || true
+        ${occ}/bin/nextcloud-occ app:enable ebookreader 2>&1 | tail -1 || true
+        # fail closed: an app missing here is a deploy failure, not a warning
+        for a in ${storeAppsJoined} files_archive ebookreader; do
+          state="$(${occ}/bin/nextcloud-occ config:app:get "$a" enabled 2>/dev/null | tail -1)"
+          [ "$state" = yes ] \
+            || { echo "deploy: app $a is not enabled (state=$state)" >&2; exit 1; }
+        done
         systemctl restart nextcloud-fpm.service
 
         if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -1973,8 +1987,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
             exit 1
           fi
           # maintenance + pause timers + preserve the current datadir
-          nix run .#occ -- maintenance:mode --on >/dev/null 2>&1 || true
-          nix run .#apply-config >/dev/null 2>&1 || true
+          ${occ}/bin/nextcloud-occ maintenance:mode --on >/dev/null 2>&1 || true
+          ${applyConfigTool}/bin/nextcloud-apply-config >/dev/null 2>&1 || true
           systemctl stop nextcloud-fpm nextcloud-caddy nextcloud-init \
             nextcloud-backup.timer nextcloud-snapshot.timer nextcloud-sync.timer \
             nextcloud-sync.service nextcloud-provision.service nextcloud-cron.timer 2>/dev/null || true
@@ -2003,8 +2017,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         FA="$(find /mnt/archive -type f | wc -l)"
         echo "primary: archive files secondcopy=$FS imported=$FA"
         systemctl start nextcloud-fpm nextcloud-caddy nextcloud-init.service 2>/dev/null || true
-        nix run .#occ -- maintenance:mode --off >/dev/null 2>&1 || true
-        nix run .#occ -- status | grep -q 'installed: true' \
+        ${occ}/bin/nextcloud-occ maintenance:mode --off >/dev/null 2>&1 || true
+        ${occ}/bin/nextcloud-occ status | grep -q 'installed: true' \
           || { echo "nextcloud not healthy after migration" >&2; exit 1; }
         install -d -m 0755 ${migrationState}
         touch ${migrationState}/phase2-complete
