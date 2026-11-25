@@ -27,7 +27,7 @@ flake.nix ──nix build──▶ /nix/store/…-nextcloud-34.0.6   (webroot, i
 
 | Path | What |
 |---|---|
-| `/var/lib/nextcloud` | Nextcloud state: `data/` (user files), `config/config.php`, `store-apps/` |
+| `/var/lib/nextcloud` | Nextcloud state: `data/` (user files), `config/config.php`; third-party app code is a read-only Nix store tree |
 | `/var/lib/nextcloud-db` | PostgreSQL 17 data directory |
 | `/var/lib/nc-caddy` | Caddy TLS/storage state |
 | `/run/nextcloud-db`, `/run/nextcloud` | Unix sockets (postgres, php-fpm) |
@@ -419,22 +419,23 @@ resolves the store path and symlinks `ffmpeg` + `ffprobe` into
 carries `/usr/local/bin` - which is what lets the Music app auto-detect it
 for transcoding and metadata of non-native formats.
 
-The Music app installs from the NC app store (`app:install music` at deploy,
-idempotent; currently 3.3.1): platform versioning and code signatures are the
-store's job, and app upgrades happen via `app:upgrade`. Vendoring the app as
-a hash-pinned tarball was attempted and dropped: the music project's 3.x
-releases are store-only (the public GitHub releases stop at NC 32), and the
-store's platform feed is an internal appdata pipeline NC fetches itself, not
-a public URL the flake can pin.
+All four third-party apps — `music` 3.3.1, `memories` 11.1.4,
+`files_archive` 1.3.2 and `ebookreader` 1.0.1 — are vendored as hash-pinned
+release tarballs and assembled into one read-only Nix store tree
+(`nextcloud-apps`). Nextcloud loads them through a non-writable `apps_paths`
+entry (`/nix-apps`), Caddy serves their static assets from the same tree, and
+`appstoreenabled` is false. App upgrades are flake edits: bump the tarball
+URL/hash, run `just deploy`. There is no web-UI or app-store update path that
+can drift the code out from under the pin.
 
 ## Maintenance cookbook
 
 ### Users — can this be done in Nix?
 
 Partially, and deliberately so. The flake owns **infrastructure and
-Nix-owned config values**; *instance content* (user files, users,
-app-store installs) is runtime state that survives deploys — the marker
-round-trip tests depend on that. Users sit in between:
+Nix-owned config values**; *instance content* (user files, users, app
+data) is runtime state that survives deploys — the marker round-trip tests
+depend on that. Users sit in between:
 
 - **Day-to-day (recommended): imperative occ** — user files, login sessions
   and user objects are runtime state; management commands are one-liners:
@@ -574,8 +575,9 @@ sudo rm -rf /var/lib/nextcloud /var/lib/nextcloud-db /var/lib/nc-caddy
 ## Backups & restore (restic) — db + app state
 
 Archives contain the **PostgreSQL dump** (`pg_dump --format=custom`) plus the
-**app state** outside the data dir: `config/` (config.php), `store-apps/`,
-`admin-password`, and the restic passphrase file. Restores rebuild the `oc_*`
+**app state** outside the data dir: `config/` (config.php),
+`admin-password`, and the restic passphrase file. Third-party app code is the
+read-only Nix store tree and is restored by the deploy, not from the backup. Restores rebuild the `oc_*`
 DB role from the archived `config.php`, so an archive restores correctly even
 onto a fresh instance.
 
@@ -632,8 +634,9 @@ just restore <snapshot-id>  # or FORCE=1 just restore <id>
 Restore behavior has two modes:
 
 - **State-only archives (what the timers produce now):** services stop → DB
-  dropped/recreated + `pg_restore` → `config/`, `store-apps/`, admin password
-  restored — **existing `data/` user files are left untouched**. Note that
+  dropped/recreated + `pg_restore` → `config/` and admin password restored —
+  **existing `data/` user files are left untouched**; the read-only Nix app
+  tree is supplied by the deploy. Note that
   restoring an *older* DB next to a *newer* `data/` can make recently uploaded
   files "unlisted" (they're on disk, unknown to the DB until re-uploaded or
   `occ files:scan --all`).
@@ -710,7 +713,8 @@ grants live inside the cluster, so rebuilding it keeps the auth model simple).
   reproducible from `flake.nix` + `flake.lock` (`nix flake check` validates the
   Caddyfile and PHP env).
 - `config.php` at `/var/lib/nextcloud/config/config.php` is user-owned; the
-  init unit re-applies a few nix-owned keys on every deploy (app store path,
-  APCu caching) — everything else you set (via occ or web UI) is kept.
+  init unit re-applies a few nix-owned keys on every deploy (read-only app
+  path, APCu/Redis cache, trash/versions retention) — everything else you set
+  (via occ or web UI) is kept.
 - Version pins live at the top of `flake.nix`: currently nextcloud **34.0.6**
   (35 is also built in this nixpkgs), php **8.4**, postgres **17**, caddy **2.11**.

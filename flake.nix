@@ -669,6 +669,16 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         url = "https://github.com/pulsejet/memories/releases/download/v11.1.4/memories.tar.gz";
         hash = "sha256-ObXsa/F1M0Qy6MQJoEhNqGb/+QPGNJQsyzxBgJ+QY1M=";
       };
+      # One read-only app tree in the Nix store. Nextcloud gets it as a
+      # non-writable apps_path; the app store is disabled, so the code cannot
+      # drift through a web-UI update. App upgrades are flake edits.
+      nextcloudApps = pkgs.runCommand "nextcloud-apps" { } ''
+        mkdir -p $out
+        tar xzf ${musicApp} -C $out
+        tar xzf ${memoriesApp} -C $out
+        tar xzf ${filesArchiveApp} -C $out
+        tar xzf ${ebookReaderApp} -C $out
+      '';
       # interim: the archive dataset binds INTO the datadir (zero copy) and is
       # served as a native shared folder; option B's copy replaces this later
       archiveBindMountName = "Archive (Read only)";
@@ -1002,13 +1012,13 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           redir /.well-known/carddav /remote.php/dav 301
           redir /.well-known/caldav /remote.php/dav 301
 
-          # store-apps apps' static assets (the apps_paths url: /store-apps)
+          # read-only Nix app tree static assets (the apps_paths url: /nix-apps)
           # block the dirs that hold executable PHP / build sources
-          @sa-protected path /store-apps/*/lib/* /store-apps/*/vendor-scoped/* /store-apps/*/composer/* /store-apps/*/appinfo/signature.json
-          respond @sa-protected 404
+          @na-protected path /nix-apps/*/lib/* /nix-apps/*/vendor-scoped/* /nix-apps/*/composer/* /nix-apps/*/appinfo/signature.json
+          respond @na-protected 404
 
-          handle /store-apps/* {
-            root /var/lib/nextcloud
+          handle_path /nix-apps/* {
+            root ${nextcloudApps}
             file_server
           }
 
@@ -1245,8 +1255,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         require $configFile;
         $CONFIG['apps_paths'] = [
           [ 'path' => '${nc}/apps',        'url' => '/apps',       'writable' => false ],
-          [ 'path' => '${ncStoreApps}',    'url' => '/store-apps', 'writable' => true  ],
+          [ 'path' => '${nextcloudApps}',  'url' => '/nix-apps',   'writable' => false ],
         ];
+        // apps are read-only Nix artifacts; updates are flake edits, not
+        // app-store or web-UI operations
+        $CONFIG['appstoreenabled'] = false;
         $CONFIG['memcache.local']  = '\\OC\\Memcache\\APCu';
         $CONFIG['memcache.distributed'] = '\\OC\\Memcache\\Redis';
         $CONFIG['memcache.locking'] = '\\OC\\Memcache\\Redis';
@@ -1259,6 +1272,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         // The bundled go-vod binary spawns per playback from bin-ext.
         $CONFIG['memories.vod.disable'] = false;
         $CONFIG['memories.vod.nc_url'] = 'http://127.0.0.1:55555';
+        // memories' bundled helpers live in the read-only Nix app tree; the
+        // app previously recorded paths under the writable store-apps dir
+        $CONFIG['memories.exiftool'] = '${nextcloudApps}/memories/bin-ext/eperl-amd64-glibc';
+        $CONFIG['memories.vod.path'] = '${nextcloudApps}/memories/bin-ext/go-vod-amd64';
+        $CONFIG['memories.vips.path'] = '${nextcloudApps}/memories/bin-ext/vips-amd64';
         // video/grid previews: add the Movie provider (video/* via ffmpeg) and
         // pin the binaries from the tools env explicitly - the Movie provider
         // reads preview_ffprobe_path and derives its ffmpeg from that dir
@@ -1538,28 +1556,12 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           systemctl enable --now nextcloud-archive-bind.service
         fi
 
-        echo "== ffmpeg + p7zip (nix env) + music app =="
-        # the music app installs from the NC app store: platform versioning
-        # and code signatures are the store's job; the version follows the
-        # store's latest-compatible release at install time (upgrades happen
-        # via app:upgrade). Vendoring was dropped: the music project's 3.x
-        # tarballs are store-only (public GitHub releases cap at NC 32)
-        install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
-        # declarative apps: all are vendored/hash-pinned, extracted here, and
-        # enabled; the fail-closed check below catches a missed app
-        install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
-        install_app() { # <app-id> <tarball>
-          rm -rf "${ncStoreApps}/$1"
-          tar xzf "$2" -C "${ncStoreApps}"
-          chown -R "${ncUser}:${ncUser}" "${ncStoreApps}/$1"
-          "${occ}/bin/nextcloud-occ" app:enable "$1" 2>&1 | tail -1 || true
-        }
-        install_app music ${musicApp}
-        install_app memories ${memoriesApp}
-        install_app files_archive ${filesArchiveApp}
-        install_app ebookreader ${ebookReaderApp}
-        # fail closed: an app missing here is a deploy failure, not a warning
+        echo "== apps (read-only Nix tree) =="
+        # The code lives in ${nextcloudApps}; apps_paths is read-only, so
+        # there is nothing to extract here. Enable the declared apps and
+        # fail closed if any did not become enabled.
         for a in ${vendoredAppsJoined}; do
+          "${occ}/bin/nextcloud-occ" app:enable "$a" 2>&1 | tail -1 || true
           state="$(${occ}/bin/nextcloud-occ config:app:get "$a" enabled 2>/dev/null | tail -1)"
           [ "$state" = yes ] \
             || { echo "deploy: app $a is not enabled (state=$state)" >&2; exit 1; }
@@ -2572,6 +2574,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ebookreader-app = ebookReaderApp;
         music-app = musicApp;
         memories-app = memoriesApp;
+        nextcloud-apps = nextcloudApps;
         caddyfile = caddyfile;
         default = deploy;
       };

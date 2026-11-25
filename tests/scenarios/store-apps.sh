@@ -14,19 +14,25 @@ FF=$(nix eval --raw .#packages.x86_64-linux.ffmpeg.outPath 2>/dev/null)/bin/ffmp
 OCC() { sudo -u nextcloud env HOME=/var/lib/nextcloud NEXTCLOUD_CONFIG_DIR=/var/lib/nextcloud/config OC_PASS="${OC_PASS:-}" NC_PASS="${NC_PASS:-}" "$PHP/bin/php" "$NC/occ" "$@"; }
 Q() { /usr/bin/sudo -u nextcloud -- "$PGBIN/bin/psql" -h /run/nextcloud-db -U nextcloud -d nextcloud -tAc "$1"; }
 
-step "declarative apps installed + enabled (all vendored/pinned)"
+step "declarative apps installed + enabled (read-only Nix tree)"
+APPS="$(nix build .#nextcloud-apps --no-link --print-out-paths 2>/dev/null | tail -1)"
+test -d "$APPS" || fail "nextcloud-apps store tree missing"
 for a in music files_archive memories ebookreader; do
   expect_equal 'yes' \
     "$(OCC config:app:get "$a" enabled 2>/dev/null | head -1)" \
     "$a enabled"
+  test -f "$APPS/$a/appinfo/info.xml" \
+    || fail "$a missing in the read-only Nix app tree"
 done
-test -f /var/lib/nextcloud/store-apps/files_archive/appinfo/info.xml \
-  || fail "files_archive contents missing in store-apps"
-VERSION=$(grep -aoE '<version>[^<]+' /var/lib/nextcloud/store-apps/files_archive/appinfo/info.xml | head -1 | cut -d'>' -f2)
-expect_equal '1.3.2' "$VERSION" "files_archive pinned at 1.3.2 (vendored tarball)"
-test -f /var/lib/nextcloud/store-apps/ebookreader/appinfo/info.xml \
-  || fail "ebookreader contents missing in store-apps"
-ok "declarative apps materialized"
+expect_equal "$APPS/files_archive" "$(OCC app:getpath files_archive)" \
+  "files_archive runs from the read-only Nix tree"
+VERSION=$(grep -aoE '<version>[^<]+' "$APPS/files_archive/appinfo/info.xml" | head -1 | cut -d'>' -f2)
+expect_equal '1.3.2' "$VERSION" "files_archive pinned at 1.3.2"
+grep -aqF "'appstoreenabled' => false" /var/lib/nextcloud/config/config.php \
+  || fail "app store not disabled in config.php"
+grep -aqF "/nix-apps" /var/lib/nextcloud/config/config.php \
+  || fail "read-only /nix-apps path missing from config.php"
+ok "declarative apps materialized in read-only Nix tree"
 
 step "redis memcache over unix socket"
 M=/run/redis-nc/redis.sock
@@ -38,14 +44,14 @@ grep -aqF "memcache.distributed' => '\\\\OC\\\\Memcache\\\\Redis'" /var/lib/next
   || fail "memcache.distributed not switched to Redis in config.php"
 ok "redis alive + memcache.distributed switched"
 
-step "caddy serves store-app app assets"
-CSS=$(find /var/lib/nextcloud/store-apps/files_archive/css -type f 2>/dev/null | head -1)
+step "caddy serves Nix app assets"
+CSS=$(find "$APPS/files_archive/css" -type f 2>/dev/null | head -1)
 test -n "$CSS" || fail "no css assets on disk for files_archive"
-URLPATH=${CSS#/var/lib/nextcloud}
+URLPATH="/nix-apps${CSS#"$APPS"}"
 expect_equal 200 \
   "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:55555$URLPATH")" \
-  "store-app css asset served by caddy"
-ok "store-app assets served"
+  "Nix app css asset served by caddy"
+ok "Nix app assets served"
 
 step "config.php: memories transcode + preview providers"
 CFG=/var/lib/nextcloud/config/config.php
@@ -53,6 +59,8 @@ grep -aqF "'memories.vod.disable' => false" "$CFG" \
   || fail "memories.vod.disable not set to false"
 grep -aqF "'memories.vod.nc_url' => 'http://127.0.0.1:55555'" "$CFG" \
   || fail "memories.vod.nc_url not pointed at the instance"
+grep -aqF "$APPS/memories/bin-ext" "$CFG" \
+  || fail "memories helper paths not in the read-only Nix tree"
 grep -aqF "'OC\\\\Preview\\\\Movie'" "$CFG" \
   || fail "Movie preview provider not enabled"
 grep -aqF 'preview_ffmpeg_path' "$CFG" \
