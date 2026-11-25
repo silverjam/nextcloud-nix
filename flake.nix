@@ -639,12 +639,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       archiveSharePerms = "15"; # read+change+create+delete, no re-share
       archiveSource = "/mnt/archive";
       ncWebUrl = "http://127.0.0.1:${webPort}";
-      # NC store apps the deploy installs + enables; add an app here and a
-      # deploy brings it in (the store resolves the platform-compatible
-      # version; NC 34 -> music 3.3.1, memories current). files_archive and
-      # ebookreader are vendored below, so they are not in this store list.
-      storeApps = [ "music" "memories" ];
-      storeAppsJoined = lib.concatStringsSep " " storeApps;
+      # Declarative apps. All four are hash-pinned and extracted into
+      # store-apps at deploy, so neither the app store nor a manual app
+      # update can drift their versions. App upgrades are flake edits.
+      vendoredApps = [ "music" "memories" "files_archive" "ebookreader" ];
+      vendoredAppsJoined = lib.concatStringsSep " " vendoredApps;
       # the archive manager app is vendored: the author's release tarball,
       # hash-pinned here (declared NC 33-35, so NC 34 is in range) and
       # extracted into store-apps at deploy — app upgrades are flake edits
@@ -658,6 +657,17 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       ebookReaderApp = pkgs.fetchurl {
         url = "https://github.com/SomeCatCode/nextcloud_ebook_reader/releases/download/v1.0.1/ebookreader.tar.gz";
         hash = "sha256-xdiQSLfxn6BzoBhO2MCjsYVBEcRkpQlpUG7SLKtgEFU=";
+      };
+      # Music 3.3.1 and Memories 11.1.4 are the currently installed/store
+      # versions; pin their exact release tarballs instead of resolving them
+      # from the app store at every deploy.
+      musicApp = pkgs.fetchurl {
+        url = "https://github.com/nc-music/music/releases/download/v3.3.1/nc-music-3.3.1.tar.gz";
+        hash = "sha256-2NGl4SvetGMMggcchjur47rsBBaY7bt1tEW1Pj73Veo=";
+      };
+      memoriesApp = pkgs.fetchurl {
+        url = "https://github.com/pulsejet/memories/releases/download/v11.1.4/memories.tar.gz";
+        hash = "sha256-ObXsa/F1M0Qy6MQJoEhNqGb/+QPGNJQsyzxBgJ+QY1M=";
       };
       # interim: the archive dataset binds INTO the datadir (zero copy) and is
       # served as a native shared folder; option B's copy replaces this later
@@ -1535,28 +1545,21 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # via app:upgrade). Vendoring was dropped: the music project's 3.x
         # tarballs are store-only (public GitHub releases cap at NC 32)
         install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
-        # store apps: the flake's storeApps list declares which apps are
-        # wanted; the NC app store handles platform versioning + signatures
-        # (app:install + app:enable are both idempotent; app versions follow
-        # the store's latest-compatible releases, upgrades via app:upgrade)
+        # declarative apps: all are vendored/hash-pinned, extracted here, and
+        # enabled; the fail-closed check below catches a missed app
         install -d -o ${ncUser} -g ${ncUser} -m 0755 ${ncStoreApps}
-        for a in ${storeAppsJoined}; do
-          ${occ}/bin/nextcloud-occ app:install "$a" 2>&1 | tail -1 || true
-          ${occ}/bin/nextcloud-occ app:enable "$a" 2>&1 | tail -1 || true
-        done
-        # the archive manager (vendored, hash-pinned)
-        rm -rf ${ncStoreApps}/files_archive
-        tar xzf ${filesArchiveApp} -C ${ncStoreApps}
-        chown -R ${ncUser}:${ncUser} ${ncStoreApps}/files_archive
-        ${occ}/bin/nextcloud-occ app:enable files_archive 2>&1 | tail -1 || true
-        # E-Book Reader (vendored, hash-pinned; store entry exists but the
-        # local app-store fetcher currently returns an empty list)
-        rm -rf ${ncStoreApps}/ebookreader
-        tar xzf ${ebookReaderApp} -C ${ncStoreApps}
-        chown -R ${ncUser}:${ncUser} ${ncStoreApps}/ebookreader
-        ${occ}/bin/nextcloud-occ app:enable ebookreader 2>&1 | tail -1 || true
+        install_app() { # <app-id> <tarball>
+          rm -rf "${ncStoreApps}/$1"
+          tar xzf "$2" -C "${ncStoreApps}"
+          chown -R "${ncUser}:${ncUser}" "${ncStoreApps}/$1"
+          "${occ}/bin/nextcloud-occ" app:enable "$1" 2>&1 | tail -1 || true
+        }
+        install_app music ${musicApp}
+        install_app memories ${memoriesApp}
+        install_app files_archive ${filesArchiveApp}
+        install_app ebookreader ${ebookReaderApp}
         # fail closed: an app missing here is a deploy failure, not a warning
-        for a in ${storeAppsJoined} files_archive ebookreader; do
+        for a in ${vendoredAppsJoined}; do
           state="$(${occ}/bin/nextcloud-occ config:app:get "$a" enabled 2>/dev/null | tail -1)"
           [ "$state" = yes ] \
             || { echo "deploy: app $a is not enabled (state=$state)" >&2; exit 1; }
@@ -2556,11 +2559,19 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         ffmpeg = pkgs.ffmpeg;
         p7zip = pkgs.p7zip;
         redis = pkgs.redis;
+        lefthook = pkgs.lefthook;
+        shellcheck = pkgs.shellcheck;
+        just = pkgs.just;
+        qemu_kvm = pkgs.qemu_kvm;
+        xorriso = pkgs.xorriso;
+        restic = restic;
         files-archive-app = pkgs.fetchurl {
           url = "https://github.com/rotdrop/nextcloud-app-files-archive/releases/download/v1.3.2/files_archive-1.3.2.tar.gz";
           hash = "sha256-3pXkwvQ1O8+CajdXLzIcV/X7E7U85yCrKbKXgwAmJXw=";
         };
         ebookreader-app = ebookReaderApp;
+        music-app = musicApp;
+        memories-app = memoriesApp;
         caddyfile = caddyfile;
         default = deploy;
       };
@@ -2640,6 +2651,12 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           grep -q "No syntax errors" lint.txt
           touch $out
         '';
+      };
+
+      devShells.${system}.default = pkgs.mkShell {
+        packages = with pkgs; [
+          lefthook shellcheck just qemu_kvm xorriso restic python3 jq curl git
+        ];
       };
     };
 }

@@ -34,8 +34,8 @@ SSH_PORT=""
 mkdir -p "$CACHE"
 
 # --- host tools from nix (qemu for boot + images, genisoimage for the seed)
-QEMU_OUT="$(nix build nixpkgs#qemu_kvm --no-link --print-out-paths | tail -1)"
-ISO_OUT="$(nix build nixpkgs#xorriso --no-link --print-out-paths | tail -1)"
+QEMU_OUT="$(nix build .#qemu_kvm --no-link --print-out-paths | tail -1)"
+ISO_OUT="$(nix build .#xorriso --no-link --print-out-paths | tail -1)"
 QIMG="$QEMU_OUT/bin/qemu-img"
 QEMU="$QEMU_OUT/bin/qemu-system-x86_64"
 

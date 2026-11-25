@@ -3,7 +3,7 @@
 # forget --prune actually prunes (and that the live snapshot survives).
 install_and_assert
 
-RESTIC_OUT="$(nix build nixpkgs#restic --no-link --print-out-paths | tail -1)"
+RESTIC_OUT="$(nix build .#restic --no-link --print-out-paths | tail -1)"
 RT() {
   runuser -u nextcloud -- env \
     HOME=/var/lib/nextcloud XDG_CACHE_HOME=/var/lib/nextcloud/cache \

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Store-apps + memcache + static-serving drill (docker): validates the
-# declarative apps through the real deploy (music, files_archive, memories
-# from the NC app store; ebookreader vendored hash-pinned), the Redis memcache over
+# declarative apps through the real deploy (music, memories, files_archive,
+# ebookreader all vendored/hash-pinned), the Redis memcache over
 # its unix socket, the memcache switch in config.php, and that Caddy serves
 # store-installed app assets (the bug that made app UIs silently blank).
 install_and_assert
@@ -14,7 +14,7 @@ FF=$(nix eval --raw .#packages.x86_64-linux.ffmpeg.outPath 2>/dev/null)/bin/ffmp
 OCC() { sudo -u nextcloud env HOME=/var/lib/nextcloud NEXTCLOUD_CONFIG_DIR=/var/lib/nextcloud/config OC_PASS="${OC_PASS:-}" NC_PASS="${NC_PASS:-}" "$PHP/bin/php" "$NC/occ" "$@"; }
 Q() { /usr/bin/sudo -u nextcloud -- "$PGBIN/bin/psql" -h /run/nextcloud-db -U nextcloud -d nextcloud -tAc "$1"; }
 
-step "store apps installed + enabled via storeApps list"
+step "declarative apps installed + enabled (all vendored/pinned)"
 for a in music files_archive memories ebookreader; do
   expect_equal 'yes' \
     "$(OCC config:app:get "$a" enabled 2>/dev/null | head -1)" \

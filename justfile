@@ -132,18 +132,18 @@ test-vm scenario="install":
 
 # install the lefthook binary (nix profile; idempotent up/downgrades)
 hooks-install:
-    nix profile add nixpkgs#lefthook
+    nix profile add .#lefthook
 
 # wire the pre-commit hook into this repo's .git (run after each fresh clone;
 # needs the lefthook binary — run `just hooks-install` once per machine)
 hooks-setup:
-    nix run nixpkgs#lefthook -- install
+    nix run .#lefthook -- install
     test -f .git/hooks/pre-commit && echo "pre-commit hook wired — next commit runs flake-check + shellcheck + just-syntax"
 
 # everything the pre-commit hook runs, without needing a git commit
 # (--all-files neutralizes lefthook's staged-files scoping)
 check:
-    nix run nixpkgs#lefthook -- run pre-commit --all-files
+    nix run .#lefthook -- run pre-commit --all-files
 
 # point https://<tailnet>.ts.net at Nextcloud via tailscale serve
 tailscale:

@@ -19,6 +19,6 @@ pre-commit:
           exit 1
         fi
     shellcheck-tests:
-      run: nix run nixpkgs#shellcheck -- -S error tests/*.sh tests/lib/*.sh tests/scenarios/*.sh
+      run: nix run .#shellcheck -- -S error tests/*.sh tests/lib/*.sh tests/scenarios/*.sh
     just-syntax:
       run: just --justfile justfile --list > /dev/null

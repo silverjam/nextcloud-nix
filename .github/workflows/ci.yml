@@ -114,10 +114,10 @@ jobs:
         run: nix flake check -L --show-trace
 
       - name: shellcheck tests/
-        run: nix run nixpkgs#shellcheck -- -S error tests/*.sh tests/lib/*.sh tests/scenarios/*.sh
+        run: nix run .#shellcheck -- -S error tests/*.sh tests/lib/*.sh tests/scenarios/*.sh
 
       - name: justfile syntax
-        run: nix run nixpkgs#just -- --justfile justfile --list > /dev/null
+        run: nix run .#just -- --justfile justfile --list > /dev/null
 
   docker-tests:
     name: docker (systemd) — ${{ matrix.scenario }}

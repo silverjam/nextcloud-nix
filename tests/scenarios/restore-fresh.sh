@@ -16,7 +16,7 @@ step "take the backup"
 nix run .#nc-backup -- incremental
 
 step "reset (interactive confirm via stdin; repo + .restic-pass survive)"
-printf 'RESET\n' | nix run nixpkgs#just -- -f /test/justfile -d /test reset
+printf 'RESET\n' | nix run .#just -- -f /test/justfile -d /test reset
 
 step "state is fresh: instance is NOT the backup"
 NEW_PW="$(cat /var/lib/nextcloud/admin-password)"
