@@ -182,3 +182,8 @@ verified against real failures during the ZFS migration (Nov 2026).
    (dbpassword, instanceid, secret, trusted domains). Never
    `file_put_contents` the main config. The deploy must also never print the
    admin password (0600 `/var/lib/nextcloud/admin-password`).
+5. **Host users/dirs are declarative**: the deploy links store
+   `sysusers.d`/`tmpfiles.d` files into `/etc` and runs
+   `systemd-sysusers`/`systemd-tmpfiles`. Do not reintroduce
+   `useradd`/`groupadd`/`install -d` for `nextcloud`, `nc-caddy`, or the
+   Sanoid/backup dirs.

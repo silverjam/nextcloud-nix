@@ -28,6 +28,18 @@ install_and_assert() {
   done
   ok "db/fpm/caddy/init active"
 
+  step "declarative users and runtime dirs"
+  [ -L /etc/sysusers.d/nextcloud.conf ] || fail "sysusers.d file not linked"
+  [ -L /etc/tmpfiles.d/nextcloud.conf ] || fail "tmpfiles.d file not linked"
+  getent passwd nextcloud >/dev/null || fail "nextcloud user missing"
+  getent passwd nc-caddy >/dev/null || fail "nc-caddy user missing"
+  id -nG nc-caddy | grep -qw nextcloud || fail "nc-caddy not in nextcloud group"
+  expect_equal 700 "$(stat -c %a /var/cache/sanoid)" "/var/cache/sanoid is 0700"
+  expect_equal 700 "$(stat -c %a /run/sanoid)" "/run/sanoid is 0700"
+  expect_equal "nextcloud:nextcloud:700" \
+    "$(stat -c '%U:%G:%a' /var/backups/nextcloud)" \
+    "backup root is nextcloud:nextcloud 0700"
+
   step "secret files are private"
   local pw
   pw="$(cat /var/lib/nextcloud/admin-password 2>/dev/null || true)"

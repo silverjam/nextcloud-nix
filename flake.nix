@@ -874,6 +874,23 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       '';
       ncUser = "nextcloud";
       webUser = "nc-caddy"; # caddy runs as this, gets socket access via group
+      # Host users/groups and the long-lived/runtime dirs are declarative:
+      # store files linked into /etc/sysusers.d + /etc/tmpfiles.d and applied
+      # by the deploy. On NixOS the same content maps to users.users and
+      # systemd.tmpfiles.rules (the /etc links would be native config there).
+      sysusersConf = pkgs.writeText "nextcloud.sysusers" ''
+        u ${ncUser} - "Nextcloud" ${ncRoot} /usr/sbin/nologin
+        u ${webUser} - "Nextcloud Caddy" /var/lib/${webUser} /usr/sbin/nologin
+        m ${webUser} ${ncUser}
+      '';
+      tmpfilesConf = pkgs.writeText "nextcloud.tmpfiles" ''
+        # Sanoid cache/run dirs (hourly sync unit and manual zfs-replicate runs)
+        d /var/cache/sanoid 0700 root root -
+        d /run/sanoid 0700 root root -
+        # backup roots (backup/snapshot services run as nextcloud)
+        d ${backupRoot} 0700 ${ncUser} ${ncUser} -
+        d ${stashRoot} 0700 ${ncUser} ${ncUser} -
+      '';
       # the runtime tools the NC services need on their PATH (nix-built env;
       # the unit PATH lines bake this store path at eval time - no symlinks
       # into system directories)
@@ -1477,17 +1494,16 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         nix-store --add-root /nix/var/nix/gcroots/nextcloud-deploy --indirect -r "$0" \
           || echo "warning: could not register the deploy GC root" >&2
 
-        echo "== system users =="
-        ensure_group() { getent group "$1" >/dev/null || groupadd --system "$1"; }
-        ensure_user()  {
-          getent passwd "$1" >/dev/null || \
-            useradd --system --gid "$1" --home-dir "$2" --no-create-home --shell /usr/sbin/nologin "$1"
-        }
-        ensure_group ${ncUser}
-        ensure_user ${ncUser} ${ncRoot}
-        ensure_group ${webUser}
-        ensure_user ${webUser} /var/lib/${webUser}
-        id -nG ${webUser} | grep -wq ${ncUser} || usermod -aG ${ncUser} ${webUser}
+        echo "== system users + runtime dirs =="
+        # Declarative host state: store files linked into /etc and applied
+        # here (idempotent). No useradd/groupadd/install -d for these.
+        install -d /etc/sysusers.d /etc/tmpfiles.d
+        ln -sf ${sysusersConf} /etc/sysusers.d/nextcloud.conf
+        systemd-sysusers /etc/sysusers.d/nextcloud.conf
+        ln -sf ${tmpfilesConf} /etc/tmpfiles.d/nextcloud.conf
+        systemd-tmpfiles --create /etc/tmpfiles.d/nextcloud.conf
+        id -nG ${webUser} | grep -wq ${ncUser} \
+          || { echo "deploy: ${webUser} is not in the ${ncUser} group" >&2; exit 1; }
 
         echo "== linking unit files =="
         # units stay read-only store artifacts; /etc holds only symlinks so
@@ -1536,7 +1552,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         rm -f ${unitDir}/nextcloud-data-sync.service ${unitDir}/nextcloud-data-sync.timer
 
         echo "== backup roots =="
-        install -d -o ${ncUser} -g ${ncUser} -m 0700 ${backupRoot} ${stashRoot}
+        # ${backupRoot} and ${stashRoot} are created by tmpfiles.d above;
+        # this section only handles the restic repository location.
         # restic repo lives on the ZFS primary pool (replicated to backup):
         # create its dataset once the pool exists (idempotent; no-op on
         # un-migrated hosts and in the container/VM drills, which have no zfs).
@@ -2143,10 +2160,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
             || { echo "replicate: ${resticDataset} is not mounted at ${resticMount}" >&2; exit 1; }
         fi
 
-        # Sanoid owns snapshot creation + time-based GFS pruning. The cache and
-        # run dirs are recreated idempotently (the host is not NixOS, so there
-        # is no tmpfiles.d rule for them).
-        install -d -m 0700 /var/cache/sanoid /run/sanoid
+        # Sanoid's cache and run dirs come from nextcloud.tmpfiles (applied by
+        # the deploy); a manual run on an undeployed host fails here clearly.
+        for d in /var/cache/sanoid /run/sanoid; do
+          [ -d "$d" ] || { echo "replicate: $d missing (run a deploy to apply tmpfiles.d)" >&2; exit 1; }
+        done
         ${sanoid}/bin/sanoid \
           --configdir=${sanoidConfig} \
           --cache-dir=/var/cache/sanoid \

@@ -722,6 +722,11 @@ grants live inside the cluster, so rebuilding it keeps the auth model simple).
 - The webroot and all binaries are immutable store paths; the instance is fully
   reproducible from `flake.nix` + `flake.lock` (`nix flake check` validates the
   Caddyfile and PHP env).
+- Host users (`nextcloud`, `nc-caddy`), the `nc-caddy` → `nextcloud` group
+  membership, and the Sanoid/backup dirs are declared in `sysusers.d` /
+  `tmpfiles.d` store files linked into `/etc` and applied by the deploy; the
+  activation contains no `useradd`/`install -d` for them. On NixOS the same
+  content maps to `users.users` and `systemd.tmpfiles.rules`.
 - `config.php` at `/var/lib/nextcloud/config/config.php` is Nextcloud-owned
   runtime state (DB credentials, instance secret, trusted domains); the init
   unit only writes the Nix-owned overlay `config/nix.config.php` (read-only
