@@ -303,10 +303,23 @@
               "${ncWebUrl}/ocs/v2.php/apps/files_sharing/api/v1/shares/$i" >/dev/null 2>&1 || true
           done
         fi
-        # the unit's ExecStop unmounted the bind; drop the now-empty mountpoint
-        # so the retired folder cannot linger in the archive user's files
+        echo "retire: destroying ${archiveDataset} and the replica pair"
+        # mounted datasets refuse destroy — unmount first (the /mnt/archive
+        # machine mount disappears with the dataset's own mountpoint)
+        zfs umount ${archiveDataset} 2>/dev/null || true
+        umount ${archiveSource} 2>/dev/null || true
+        zfs umount ${zfsPoolBackup}/archive 2>/dev/null || true
+        # A bind that outlived the unit stop (a scan or DAV reader can make the
+        # ExecStop umount fail EBUSY) is detached by the destroy itself, so the
+        # mountpoint is removed only after the datasets are gone; rmdir before
+        # the destroy sees a mounted path and leaves the folder behind.
+        zfs destroy -r ${archiveDataset} 2>/dev/null || true
+        zfs destroy -r ${zfsPoolBackup}/archive 2>/dev/null || true
         if ! findmnt -no SOURCE "${archiveBindWhere}" >/dev/null 2>&1; then
           rmdir "${archiveBindWhere}" 2>/dev/null || true
+        fi
+        if [ -e "${archiveBindWhere}" ]; then
+          echo "retire: mountpoint still present at ${archiveBindWhere} (still mounted or not empty)" >&2
         fi
         # the mountpoint is gone, but its filecache rows are not: a datadir-wide
         # indexer (files:scan, memories' 15-minute IndexJob) then keeps tripping
@@ -318,14 +331,6 @@
         /usr/bin/sudo -u ${ncUser} env HOME=${ncRoot} NEXTCLOUD_CONFIG_DIR=${ncConfig} \
           ${phpEnv}/bin/php ${nc}/occ files:scan ${archiveOwner} \
           || echo "retire: filecache prune failed — run 'occ files:scan ${archiveOwner}' by hand" >&2
-        echo "retire: destroying ${archiveDataset} and the replica pair"
-        # mounted datasets refuse destroy — unmount first (the /mnt/archive
-        # machine mount disappears with the dataset's own mountpoint)
-        zfs umount ${archiveDataset} 2>/dev/null || true
-        umount ${archiveSource} 2>/dev/null || true
-        zfs umount ${zfsPoolBackup}/archive 2>/dev/null || true
-        zfs destroy -r ${archiveDataset} 2>/dev/null || true
-        zfs destroy -r ${zfsPoolBackup}/archive 2>/dev/null || true
         touch ${migrationState}/archive-retired
         echo "retire: done — replication skips the archive datasets from now on; space reclaimed as the pools free lazily"
         # <<< APPLY

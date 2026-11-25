@@ -111,6 +111,13 @@ verified against real failures during the ZFS migration (Nov 2026).
 8. **occ must run as the nextcloud user with the instance env**:
    `sudo -u nextcloud env HOME=... NEXTCLOUD_CONFIG_DIR=... php <nc>/occ`.
    Raw `php occ` from a bare shell reports "Nextcloud is not installed".
+9. **A bind mount survives `zfs umount <dataset>` but is detached by
+   `zfs destroy`** (zfs 2.4.1): the bind target stays busy for `umount`
+   while a reader holds it, yet destroying the dataset tears the bind down
+   and leaves an empty directory. Remove the bind target with `rmdir`
+   *after* the destroy - `nc-archive-retire` did it before, saw a mounted
+   path, and left "Archive (Read only)" behind (caught by zfs-drill).
+   Open readers still make the umount and the destroy fail EBUSY.
 
 ## Nextcloud 34 behavior notes
 
