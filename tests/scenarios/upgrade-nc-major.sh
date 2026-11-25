@@ -4,6 +4,12 @@
 #   maintenance:mode on → deploy → occ upgrade → mode off → assert state.
 SAVE_BASE
 PIN_NC 33
+# memories 11.1.4 declares Nextcloud 34-35, so the NC33 baseline must not
+# enable it or the deploy's fail-closed app check stops before the upgrade.
+# The restored flake enables all four apps on NC34.
+sed -i 's|"memories" ||' /test/flake.nix
+grep -q '"memories"' /test/flake.nix \
+  && { echo "[scenario] failed to drop memories from the baseline app list" >&2; exit 1; }
 echo "[scenario] baseline: Nextcloud 33"
 nix run .#deploy
 install_and_assert
