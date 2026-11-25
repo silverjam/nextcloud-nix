@@ -651,6 +651,13 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         url = "https://github.com/rotdrop/nextcloud-app-files-archive/releases/download/v1.3.2/files_archive-1.3.2.tar.gz";
         hash = "sha256-3pXkwvQ1O8+CajdXLzIcV/X7E7U85yCrKbKXgwAmJXw=";
       };
+      # E-Book Reader is not yet published to the NC app store, so vendor the
+      # author's hash-pinned release tarball (declared NC 33-35, PHP 8.2+;
+      # zip/gd/dom/mbstring are in phpEnv) and enable it from store-apps.
+      ebookReaderApp = pkgs.fetchurl {
+        url = "https://github.com/SomeCatCode/nextcloud_ebook_reader/releases/download/v1.0.1/ebookreader.tar.gz";
+        hash = "sha256-xdiQSLfxn6BzoBhO2MCjsYVBEcRkpQlpUG7SLKtgEFU=";
+      };
       # interim: the archive dataset binds INTO the datadir (zero copy) and is
       # served as a native shared folder; option B's copy replaces this later
       archiveBindMountName = "Archive (Read only)";
@@ -1534,6 +1541,12 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         tar xzf "$FATA" -C ${ncStoreApps}
         chown -R ${ncUser}:${ncUser} ${ncStoreApps}/files_archive
         nix run .#occ -- app:enable files_archive 2>&1 | tail -1 || true
+        # E-Book Reader (vendored: not yet in the NC app store)
+        EBRA="$(nix build --no-link --print-out-paths .#ebookreader-app 2>/dev/null | tail -1)"
+        rm -rf ${ncStoreApps}/ebookreader
+        tar xzf "$EBRA" -C ${ncStoreApps}
+        chown -R ${ncUser}:${ncUser} ${ncStoreApps}/ebookreader
+        nix run .#occ -- app:enable ebookreader 2>&1 | tail -1 || true
         systemctl restart nextcloud-fpm.service
 
         if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -2533,6 +2546,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           url = "https://github.com/rotdrop/nextcloud-app-files-archive/releases/download/v1.3.2/files_archive-1.3.2.tar.gz";
           hash = "sha256-3pXkwvQ1O8+CajdXLzIcV/X7E7U85yCrKbKXgwAmJXw=";
         };
+        ebookreader-app = ebookReaderApp;
         caddyfile = caddyfile;
         default = deploy;
       };

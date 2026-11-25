@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Store-apps + memcache + static-serving drill (docker): validates the
-# declarative storeApps list through the real deploy (music, files_archive,
-# memories installed+enabled from the NC app store), the Redis memcache over
+# declarative apps through the real deploy (music, files_archive, memories
+# from the NC app store; ebookreader vendored hash-pinned), the Redis memcache over
 # its unix socket, the memcache switch in config.php, and that Caddy serves
 # store-installed app assets (the bug that made app UIs silently blank).
 install_and_assert
@@ -15,7 +15,7 @@ OCC() { sudo -u nextcloud env HOME=/var/lib/nextcloud NEXTCLOUD_CONFIG_DIR=/var/
 Q() { /usr/bin/sudo -u nextcloud -- "$PGBIN/bin/psql" -h /run/nextcloud-db -U nextcloud -d nextcloud -tAc "$1"; }
 
 step "store apps installed + enabled via storeApps list"
-for a in music files_archive memories; do
+for a in music files_archive memories ebookreader; do
   expect_equal 'yes' \
     "$(OCC config:app:get "$a" enabled 2>/dev/null | head -1)" \
     "$a enabled"
@@ -24,7 +24,9 @@ test -f /var/lib/nextcloud/store-apps/files_archive/appinfo/info.xml \
   || fail "files_archive contents missing in store-apps"
 VERSION=$(grep -aoE '<version>[^<]+' /var/lib/nextcloud/store-apps/files_archive/appinfo/info.xml | head -1 | cut -d'>' -f2)
 expect_equal '1.3.2' "$VERSION" "files_archive pinned at 1.3.2 (vendored tarball)"
-ok "storeApps list fully materialized"
+test -f /var/lib/nextcloud/store-apps/ebookreader/appinfo/info.xml \
+  || fail "ebookreader contents missing in store-apps"
+ok "declarative apps materialized"
 
 step "redis memcache over unix socket"
 M=/run/redis-nc/redis.sock
@@ -75,7 +77,7 @@ ok "video previews work"
 
 step "app store install is idempotent on rerun"
 nix run .#deploy >/dev/null 2>&1 || fail "rerun deploy failed"
-for a in music files_archive memories; do
+for a in music files_archive memories ebookreader; do
   expect_equal 'yes' \
     "$(OCC config:app:get "$a" enabled 2>/dev/null | head -1)" \
     "$a still enabled after rerun"
