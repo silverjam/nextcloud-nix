@@ -84,7 +84,10 @@ expect_equal 200 "$PREVIEW" "video preview generated (Movie provider via ffmpeg)
 ok "video previews work"
 
 step "app store install is idempotent on rerun"
+CFG_MTIME="$(stat -c %Y /var/lib/nextcloud/config/config.php)"
 nix run .#deploy >/dev/null 2>&1 || fail "rerun deploy failed"
+expect_equal "$CFG_MTIME" "$(stat -c %Y /var/lib/nextcloud/config/config.php)" \
+  "rerun deploy left config.php untouched"
 for a in music files_archive memories ebookreader; do
   expect_equal 'yes' \
     "$(OCC config:app:get "$a" enabled 2>/dev/null | head -1)" \
