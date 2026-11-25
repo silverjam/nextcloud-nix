@@ -27,7 +27,7 @@ flake.nix ──nix build──▶ /nix/store/…-nextcloud-34.0.6   (webroot, i
 
 | Path | What |
 |---|---|
-| `/var/lib/nextcloud` | Nextcloud state: `data/` (user files), `config/config.php`; third-party app code is a read-only Nix store tree |
+| `/var/lib/nextcloud` | Nextcloud state: `data/` (user files), `config/config.php` (runtime/secrets) + `config/nix.config.php` (Nix-owned overlay); third-party app code is a read-only Nix store tree |
 | `/var/lib/nextcloud-db` | PostgreSQL 17 data directory |
 | `/var/lib/nc-caddy` | Caddy TLS/storage state |
 | `/run/nextcloud-db`, `/run/nextcloud` | Unix sockets (postgres, php-fpm) |
@@ -89,7 +89,8 @@ nix run .#occ -- background:cron
   `localhost`, your hostname, and your primary LAN IP. For any other name/IP:
   `nix run .#occ -- config:system:set trusted_domains 3 --value <ip-or-name>`
 - **Admin login:** `admin`, password at `/var/lib/nextcloud/admin-password`
-  (generated on first install, mode 0600): `sudo cat /var/lib/nextcloud/admin-password`
+  (generated on first install, mode 0600; the deploy no longer prints it —
+  rotate it after the first login): `sudo cat /var/lib/nextcloud/admin-password`
 - **Firewall:** deploy auto-opens `55555/tcp` in ufw when ufw is active.
 
 ## Upgrades
@@ -201,8 +202,9 @@ migrations. Two things the drills discovered and the procedure handles:
 1. **chicken-and-egg**: after the code swap, `occ` cannot boot while
    `config.php` still pins the *old store's* `apps_paths` (old-tree apps
    crash the new core — even `occ status`). `nix run .#apply-config`
-   re-writes the nix-owned config values *without* booting occ, which is why
-   it exists as a standalone tool.
+   rewrites the Nix-owned overlay (`config/nix.config.php`) *without*
+   booting occ; Nextcloud reads that overlay over `config.php`, so the new
+   path is in effect at boot.
 2. **two-phase deploy**: while `needsDbUpgrade` is true, db-occ commands are
    refused — `nextcloud-init` (which runs `db:add-missing-indices`) fails and
    the deploy aborts mid-way. That is expected; the upgrade clears it and the
@@ -582,7 +584,8 @@ sudo rm -rf /var/lib/nextcloud /var/lib/nextcloud-db /var/lib/nc-caddy
 ## Backups & restore (restic) — db + app state
 
 Archives contain the **PostgreSQL dump** (`pg_dump --format=custom`) plus the
-**app state** outside the data dir: `config/` (config.php),
+**app state** outside the data dir: `config/` (config.php + the
+nix.config.php overlay),
 `admin-password`, and the restic passphrase file. Third-party app code is the
 read-only Nix store tree and is restored by the deploy, not from the backup. Restores rebuild the `oc_*`
 DB role from the archived `config.php`, so an archive restores correctly even
@@ -719,9 +722,12 @@ grants live inside the cluster, so rebuilding it keeps the auth model simple).
 - The webroot and all binaries are immutable store paths; the instance is fully
   reproducible from `flake.nix` + `flake.lock` (`nix flake check` validates the
   Caddyfile and PHP env).
-- `config.php` at `/var/lib/nextcloud/config/config.php` is user-owned; the
-  init unit re-applies a few nix-owned keys on every deploy (read-only app
-  path, APCu/Redis cache, trash/versions retention) — everything else you set
-  (via occ or web UI) is kept.
+- `config.php` at `/var/lib/nextcloud/config/config.php` is Nextcloud-owned
+  runtime state (DB credentials, instance secret, trusted domains); the init
+  unit only writes the Nix-owned overlay `config/nix.config.php` (read-only
+  app paths, APCu/Redis cache, previews/memories, trash/versions retention),
+  which Nextcloud merges over it at read time — everything you set via occ or
+  the web UI is kept; the deploy itself never rewrites `config.php` (only
+  Nextcloud's own writes do, e.g. a trusted-domain change).
 - Version pins live at the top of `flake.nix`: currently nextcloud **34.0.6**
   (35 is also built in this nixpkgs), php **8.4**, postgres **17**, caddy **2.11**.

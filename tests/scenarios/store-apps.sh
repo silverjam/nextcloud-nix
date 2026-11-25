@@ -28,10 +28,10 @@ expect_equal "$APPS/files_archive" "$(OCC app:getpath files_archive)" \
   "files_archive runs from the read-only Nix tree"
 VERSION=$(grep -aoE '<version>[^<]+' "$APPS/files_archive/appinfo/info.xml" | head -1 | cut -d'>' -f2)
 expect_equal '1.3.2' "$VERSION" "files_archive pinned at 1.3.2"
-grep -aqF "'appstoreenabled' => false" /var/lib/nextcloud/config/config.php \
-  || fail "app store not disabled in config.php"
-grep -aqF "/nix-apps" /var/lib/nextcloud/config/config.php \
-  || fail "read-only /nix-apps path missing from config.php"
+grep -aqF "'appstoreenabled' => false" /var/lib/nextcloud/config/nix.config.php \
+  || fail "app store not disabled in nix.config.php"
+grep -aqF "/nix-apps" /var/lib/nextcloud/config/nix.config.php \
+  || fail "read-only /nix-apps path missing from nix.config.php"
 ok "declarative apps materialized in read-only Nix tree"
 
 step "redis memcache over unix socket"
@@ -40,8 +40,8 @@ M=/run/redis-nc/redis.sock
 expect_equal 'PONG' \
   "$("$RCLI" -s "$M" ping 2>/dev/null)" \
   "redis PONG over unix socket"
-grep -aqF "memcache.distributed' => '\\\\OC\\\\Memcache\\\\Redis'" /var/lib/nextcloud/config/config.php \
-  || fail "memcache.distributed not switched to Redis in config.php"
+grep -aqF "memcache.distributed' => '\\\\OC\\\\Memcache\\\\Redis'" /var/lib/nextcloud/config/nix.config.php \
+  || fail "memcache.distributed not switched to Redis in nix.config.php"
 ok "redis alive + memcache.distributed switched"
 
 step "caddy serves Nix app assets"
@@ -53,8 +53,8 @@ expect_equal 200 \
   "Nix app css asset served by caddy"
 ok "Nix app assets served"
 
-step "config.php: memories transcode + preview providers"
-CFG=/var/lib/nextcloud/config/config.php
+step "nix.config.php: memories transcode + preview providers"
+CFG=/var/lib/nextcloud/config/nix.config.php
 grep -aqF "'memories.vod.disable' => false" "$CFG" \
   || fail "memories.vod.disable not set to false"
 grep -aqF "'memories.vod.nc_url' => 'http://127.0.0.1:55555'" "$CFG" \

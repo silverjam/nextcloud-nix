@@ -176,3 +176,9 @@ verified against real failures during the ZFS migration (Nov 2026).
    *before* the start marker, and the extraction then prints everything from
    there. Nothing destructive is automated, and recipes umount before
    `zfs destroy`.
+4. **Nix-owned Nextcloud config is an overlay, never a rewrite**: write
+   `config/nix.config.php` (Nextcloud merges every `*.config.php` over
+   `config.php` at read time) and leave `config.php` to Nextcloud
+   (dbpassword, instanceid, secret, trusted domains). Never
+   `file_put_contents` the main config. The deploy must also never print the
+   admin password (0600 `/var/lib/nextcloud/admin-password`).

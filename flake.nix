@@ -1259,9 +1259,13 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         exit 1
       '';
 
-      # Re-applies nix-owned values to config.php (idempotent; safe on every
-      # deploy — keeps the pinned store path for the read-only app dir in sync
-      # with the current build).
+      # Nix-owned settings live in a separate config/*.config.php overlay:
+      # Nextcloud merges every <name>.config.php over config/config.php at
+      # read time, so this tool never rewrites the secret-bearing config.php
+      # (dbpassword, instanceid, secret and trusted_domains stay
+      # Nextcloud-owned runtime state). It runs before any occ call: after an
+      # NC major swap occ cannot even boot while config.php pins the old
+      # store's apps_paths, and the overlay supplies the new path at read time.
       applyConfig = pkgs.writeText "nextcloud-apply-config.php" ''
         <?php
         $configFile = '${ncConfig}/config.php';
@@ -1269,7 +1273,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           fwrite(STDERR, "nextcloud-apply-config: ${ncConfig}/config.php missing; install first\n");
           exit(1);
         }
-        require $configFile;
+        $overlayFile = '${ncConfig}/nix.config.php';
+        $CONFIG = [];
         $CONFIG['apps_paths'] = [
           [ 'path' => '${nc}/apps',        'url' => '/apps',       'writable' => false ],
           [ 'path' => '${nextcloudApps}',  'url' => '/nix-apps',   'writable' => false ],
@@ -1326,9 +1331,13 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         $CONFIG['trashbin_retention_obligation']  = '30, 30';
         // bound version growth: keep edits for at least 30 days, delete after 90
         $CONFIG['versions_retention_obligation']  = '30, 90';
-        file_put_contents($configFile, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n");
-        chmod($configFile, 0640);
-        echo "nextcloud-apply-config: OK\n";
+        // run heavy maintenance once a day at 02:00 local time
+        $CONFIG['maintenance_window_start'] = 2;
+        $tmp = $overlayFile . '.tmp';
+        file_put_contents($tmp, "<?php\n\$CONFIG = " . var_export($CONFIG, true) . ";\n");
+        chmod($tmp, 0640);
+        rename($tmp, $overlayFile);
+        echo "nextcloud-apply-config: wrote " . $overlayFile . "\n";
       '';
 
       # One-shot bootstrap: db, first-time install, trusted domains, hardening.
@@ -1363,9 +1372,10 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
 
         RUNOCC() { ${phpEnv}/bin/php ${nc}/occ "$@"; }
 
-        # Apply nix-owned config values BEFORE any occ call. After an
+        # Write the nix-owned config overlay BEFORE any occ call. After an
         # NC major swap, occ cannot even boot while config.php still pins
-        # the old store's apps_paths (old-tree apps crash the new core).
+        # the old store's apps_paths (old-tree apps crash the new core); the
+        # overlay is loaded after config.php and supplies the new path.
         # On a first install there is no config.php yet — skip silently.
         ${phpEnv}/bin/php ${applyConfig} 2>&1 \
           || echo "  (apply-config skipped — no config.php yet)"
@@ -1393,15 +1403,22 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
             --data-dir ${ncDataDir}
         fi
 
-        # --- nix-owned config.php values (fresh store path every deploy) ---
+        # --- nix-owned config overlay (fresh store paths every deploy) ---
         ${phpEnv}/bin/php ${applyConfig}
 
         # --- trusted domains: localhost, hostname, primary LAN IP ---
-        RUNOCC config:system:set trusted_domains 0 --value localhost
-        RUNOCC config:system:set trusted_domains 1 --value "$(hostname)"
+        # only write when the value actually changes: an occ config write
+        # rewrites config.php (with the merged cache), and a steady-state
+        # deploy should leave the secret-bearing file untouched
+        set_trusted() {
+          [ "$(RUNOCC config:system:get trusted_domains "$1" 2>/dev/null || true)" = "$2" ] \
+            || RUNOCC config:system:set trusted_domains "$1" --value "$2"
+        }
+        set_trusted 0 localhost
+        set_trusted 1 "$(hostname)"
         LANIP="$(ip -4 -o route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || true)"
         if [ -n "$LANIP" ]; then
-          RUNOCC config:system:set trusted_domains 2 --value "$LANIP"
+          set_trusted 2 "$LANIP"
         fi
         # 127.0.0.1: appended at the next free index (never clobbers user
         # entries like a tailscale domain at index 3) if not present yet
@@ -1410,7 +1427,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           IDX="$(RUNOCC config:system:get trusted_domains | grep -c . || echo 0)"
           RUNOCC config:system:set trusted_domains "$IDX" --value 127.0.0.1
         fi
-        RUNOCC config:system:set maintenance_window_start --type integer --value 2
 
         # --- tidy up indexes the install may skip ---
         # during a NC major upgrade window (needsDbUpgrade) db-occ commands
@@ -1603,7 +1619,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         echo "Nextcloud:    http://localhost:${webPort}/   (LAN: http://$(hostname -I 2>/dev/null | awk '{print $1}'):${webPort}/ — change the port in flake.nix: webPort)"
         echo "Tailnet:      https://<node>.ts.net  (fronted by tailscale — see README 'Tailscale HTTPS')"
         echo "occ CLI:      nix run .#occ -- status"
-        echo "Admin login:  admin / $(cat ${ncRoot}/admin-password 2>/dev/null || echo '(see /var/lib/nextcloud/admin-password)')"
+        echo "Admin login:  admin (initial password in ${ncRoot}/admin-password, mode 0600 — not printed)"
       '';
       # ------------------------------------------------------------------
       # restic backup of the instance: pg_dump + file data in every archive
@@ -2426,8 +2442,6 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
 
         OCC() { ${phpEnv}/bin/php ${nc}/occ "$@"; }
         CRED="${ncRoot}/provision-credentials-$(date +%Y%m%d-%H%M%S).log"
-        touch "$CRED"
-        chmod 0600 "$CRED"
         NEW=0
 
         for raw in "''${SPECS[@]}"; do
@@ -2455,6 +2469,11 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
               OCC user:add "$uid" --password-from-env >/dev/null
             fi
             unset OC_PASS
+            # create the credentials log only when there is a password to
+            # record (one 0600 file per run that created users, not per deploy)
+            if [ ! -f "$CRED" ]; then
+              (umask 077; : > "$CRED")
+            fi
             printf 'uid=%s password=%s (created %s)\n' "$uid" "$PW" "$(date -u)" >> "$CRED"
             NEW=$((NEW + 1))
             echo "provision: created $uid — password appended to $CRED"
@@ -2513,7 +2532,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           echo "removed uid=$ruid backup=$DEST (occ user:delete done)" \
             | tee -a "${ncRoot}/provision-removals.log"
         done
-        chmod 0600 "$CRED"
+        if [ -f "$CRED" ]; then chmod 0600 "$CRED"; fi
         echo "provision: done ($NEW created, $(( ''${#SPECS[@]} - NEW )) already existed)"
       '';
 
