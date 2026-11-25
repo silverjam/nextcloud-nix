@@ -60,6 +60,10 @@ sync-data:
 zfs-check:
     nix run .#zfs-check
 
+# make ZFS snapshots visible at <mountpoint>/.zfs/snapshot (display-only)
+snapshots-visible:
+    nix run .#zfs-snapdir-visible
+
 # final verification of the whole migration (enables disaster-mirror removal)
 zfs-verify-migration:
     nix run .#zfs-verify-migration

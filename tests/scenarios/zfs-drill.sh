@@ -126,7 +126,7 @@ test -f /var/backups/zfs-replica/archive/personal-legacy.txt \
   || fail "planted legacy file not replicated in archive"
 # -print -quit, not a grep pipe: pipefail turns grep -q's early exit into a
 # find SIGPIPE (141) and would report an empty replica
-[ -n "$(find /var/backups/zfs-replica/nextcloud-data -type f -print -quit 2>/dev/null)" ] \
+[ -n "$(find /var/backups/zfs-replica/nextcloud-data -path '*/.zfs' -prune -o -type f -print -quit 2>/dev/null)" ] \
   || fail "nextcloud datadir replica empty"
 ok "replica seeded + personal file replicated"
 
@@ -175,6 +175,18 @@ zfs list -H -o name drill-backup/restic >/dev/null 2>&1 \
 test -e /var/backups/zfs-replica/restic/repo/config \
   || fail "restic repo not replicated to the backup pool"
 ok "restic repo has a send/receive replica on drill-backup/restic"
+
+step "snapdir visibility"
+nix run .#zfs-snapdir-visible
+for ds in drill-primary/nextcloud drill-backup/nextcloud-data \
+          drill-primary/restic drill-backup/restic; do
+  [ "$(zfs get -H -o value snapdir "$ds")" = visible ] \
+    || fail "$ds snapdir not visible"
+done
+[ -d /var/lib/nextcloud/data/.zfs/snapshot ] \
+  || fail ".zfs/snapshot missing on the datadir"
+ls /var/lib/nextcloud/data/.zfs/snapshot >/dev/null
+ok "snapdir=visible on nextcloud + restic (source and replica)"
 
 step "retention: real Sanoid GFS pruning (VM clock)"
 # Sanoid prunes by the snapshot's real ZFS creation time, not by the date
@@ -242,7 +254,12 @@ systemctl start nextcloud-archive-bind.service
 findmnt -no SOURCE "/var/lib/nextcloud/data/archive/files/Archive (Read only)" \
   | grep -qx drill-primary/archive \
   || fail "archive bind did not mount drill-primary/archive"
-ok "interim archive bind mounted"
+# index the bind first: the filecache has to hold rows for the interim tree so
+# the retirement can be shown to prune them (the drill asserts both sides)
+nix run .#occ -- files:scan --path="archive/files/Archive (Read only)" >/dev/null 2>&1
+[ "$(Q "SELECT count(*) FROM oc_filecache WHERE path LIKE 'files/Archive (Read only)%'")" -ge 1 ] \
+  || fail "interim bind was not indexed into the filecache"
+ok "interim archive bind mounted + indexed into the filecache"
 
 step "retirement: gated destroy of the archive datasets (replicate adapts)"
 MS=/var/backups/nextcloud/migration-state
@@ -271,6 +288,12 @@ zfs list -H -o name drill-primary/archive >/dev/null 2>&1 \
 [ -f "$MS/archive-retired" ] || fail "archive-retired stamp missing"
 [ ! -e "/var/lib/nextcloud/data/archive/files/Archive (Read only)" ] \
   || fail "retired bind mountpoint still present"
+# the mountpoint is gone, so the retire recipe must have pruned the interim
+# tree from the filecache — otherwise datadir-wide indexers (files:scan,
+# memories' 15-minute IndexJob) keep failing on the phantom files
+[ "$(Q "SELECT count(*) FROM oc_filecache WHERE path LIKE 'files/Archive (Read only)%'")" -eq 0 ] \
+  || fail "retire left the interim tree in the filecache"
+ok "retire pruned the interim tree from the filecache"
 # the unit's ConditionPathExists=!.../archive-retired must keep a manual
 # start (and therefore a later deploy) from recreating the empty bind
 systemctl start nextcloud-archive-bind.service 2>/dev/null || true

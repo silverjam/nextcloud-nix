@@ -308,6 +308,16 @@
         if ! findmnt -no SOURCE "${archiveBindWhere}" >/dev/null 2>&1; then
           rmdir "${archiveBindWhere}" 2>/dev/null || true
         fi
+        # the mountpoint is gone, but its filecache rows are not: a datadir-wide
+        # indexer (files:scan, memories' 15-minute IndexJob) then keeps tripping
+        # over the phantom files ("File is not readable:
+        # .../Archive (Read only)/...") because they no longer exist on disk. A
+        # full-user scan drops the cached children missing on disk
+        # (Scanner::handleChildren), which also lets memories' cleanupStale
+        # drop the matching timeline rows.
+        /usr/bin/sudo -u ${ncUser} env HOME=${ncRoot} NEXTCLOUD_CONFIG_DIR=${ncConfig} \
+          ${phpEnv}/bin/php ${nc}/occ files:scan ${archiveOwner} \
+          || echo "retire: filecache prune failed — run 'occ files:scan ${archiveOwner}' by hand" >&2
         echo "retire: destroying ${archiveDataset} and the replica pair"
         # mounted datasets refuse destroy — unmount first (the /mnt/archive
         # machine mount disappears with the dataset's own mountpoint)
@@ -2163,7 +2173,9 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           | grep -q primary || { echo "datadir not a zfs mount" >&2; exit 1; }
         systemctl is-active --quiet nextcloud-fpm nextcloud-db nextcloud-caddy \
           || { echo "stack not healthy" >&2; exit 1; }
-        REP="$(find ${replicaMount} -type f 2>/dev/null | wc -l)"
+        # skip the .zfs snapshot view: with snapdir=visible, find would
+        # otherwise walk every snapshot instead of the live replica
+        REP="$(find ${replicaMount} -path '*/.zfs' -prune -o -type f -print 2>/dev/null | wc -l)"
         [ "$REP" -ge 1 ] || { echo "replica empty" >&2; exit 1; }
         touch ${migrationState}/migration-complete
         echo "migration verified — the disaster mirror stays as the second copy until the archive
@@ -2296,6 +2308,29 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         [ "$(layers)" = 1 ] \
           || { echo "unstack: $ARCHIVE still has $(layers) layers" >&2; exit 1; }
         echo "unstack: $DS mounted once at $ARCHIVE; datadir bind cleared"
+      '';
+
+      zfsSnapdirVisible = pkgs.writeShellScriptBin "zfs-snapdir-visible" ''
+        set -euo pipefail
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+        export PATH="/run/current-system/sw/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+        # Display-only change: each dataset's historical snapshots become
+        # visible at <mountpoint>/.zfs/snapshot. They auto-mount read-only on
+        # access; this neither creates snapshots nor mounts them all at once.
+        N=0
+        for ds in ${zfsPoolPrimary}/nextcloud ${replicaDataset} ${resticDataset} ${resticReplica}; do
+          if zfs list -H -o name "$ds" >/dev/null 2>&1; then
+            zfs set snapdir=visible "$ds"
+            MP="$(zfs get -H -o value mountpoint "$ds")"
+            printf '%-30s snapdir=%s  %s/.zfs/snapshot\n' "$ds" "$(zfs get -H -o value snapdir "$ds")" "$MP"
+            N=$((N + 1))
+          else
+            echo "skip $ds (not present)"
+          fi
+        done
+        [ "$N" -gt 0 ] || { echo "no configured ZFS datasets present" >&2; exit 1; }
+        echo "snapshots are visible under each dataset's .zfs/snapshot (read-only, auto-mounted on access)"
       '';
 
       zfsCheck = pkgs.writeShellScriptBin "zfs-check" ''
@@ -2486,6 +2521,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         "nc-archive-unstack" = ncArchiveUnstack;
         "nc-transcode-unplayable" = ncTranscodeUnplayable;
         "zfs-check" = zfsCheck;
+        "zfs-snapdir-visible" = zfsSnapdirVisible;
         "provisioned-passwords" = zfsProvisionedPasswords;
         nextcloud = nc;
         php = phpEnv;
@@ -2560,6 +2596,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
                 "${ncArchiveUnstack}/bin/nc-archive-unstack" \
                 "${ncTranscodeUnplayable}/bin/nc-transcode-unplayable" \
                 "${zfsCheck}/bin/zfs-check" \
+                "${zfsSnapdirVisible}/bin/zfs-snapdir-visible" \
                 "${ncProvisionJob}/bin/nc-provision" \
                 "${zfsProvisionedPasswords}/bin/provisioned-passwords" \
                 "${drivesMount}/bin/drives-mount" \

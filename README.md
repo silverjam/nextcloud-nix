@@ -368,6 +368,13 @@ Retirement is also safe against later deploys: `archive-retired` makes the
 bind unit refuse to start (`ConditionPathExists=!…/archive-retired`), and
 both the retire recipe and deploy remove the now-empty
 `Archive (Read only)` mountpoint, so the interim folder cannot reappear.
+Retirement also prunes the interim tree from the filecache (a full-user
+`occ files:scan` once the mountpoint is gone): the cached rows outlive the
+mountpoint otherwise, and datadir-wide indexers then keep failing on phantom
+files — the memories app's 15-minute `IndexJob` logs
+`Failed to index file …: File is not readable: …/Archive (Read only)/…` for
+every one of them until the rows are gone (memories' own `cleanupStale` then
+drops the matching timeline rows).
 
 `just nc-archive-unstack` repairs a host that accumulated duplicate mounts of
 the archive dataset: a pre-fix `nextcloud-archive-bind.service` re-ran a bare
@@ -395,6 +402,14 @@ afterwards is present on both pools. The restic repo is deliberately not
 GFS-snapshotted: restic already keeps its own hourly/daily history inside the
 repo. Syncoid still replicates the repo to `backup/restic` hourly using its
 own rolling `syncoid_*` snapshot.
+
+`just snapshots-visible` sets `snapdir=visible` on the datadir and restic
+datasets (source and replica). Their snapshots are then visible at
+`<mountpoint>/.zfs/snapshot/` — for example
+`/var/lib/nextcloud/data/.zfs/snapshot/autosnap_...` — and auto-mount
+read-only on access. This is a display property only: it creates no extra
+snapshots and mounts nothing eagerly. The `.zfs` entry appears at the dataset
+root (the Nextcloud data root, not inside user `files/` trees).
 
 ### ffmpeg and the music app
 
