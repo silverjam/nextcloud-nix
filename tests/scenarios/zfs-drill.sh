@@ -27,6 +27,22 @@ systemctl is-enabled --quiet nextcloud-sync.timer \
 systemctl stop nextcloud-sync.timer
 ok "hourly sync timer enabled (stopped for the drill)"
 
+step "Sanoid/Syncoid use the host ZFS userland"
+REP="$(nix build .#zfs-replicate --no-link --print-out-paths | tail -1)/bin/zfs-replicate"
+SAN="$(grep -m1 -oE '/nix/store/[^ ]+-sanoid-[^/]+/bin/sanoid' "$REP")"
+SYN="$(grep -m1 -oE '/nix/store/[^ ]+-sanoid-[^/]+/bin/syncoid' "$REP")"
+[ -n "$SAN" ] && [ -n "$SYN" ] || fail "sanoid/syncoid paths missing from zfs-replicate"
+grep -aq 'system-zfs' "$SAN" || fail "sanoid wrapper does not use the system-zfs shim"
+grep -aq 'system-zfs' "$SYN" || fail "syncoid wrapper does not use the system-zfs shim"
+SHIM="$(grep -m1 -oE '/nix/store/[^ ]+-system-zfs/bin' "$SAN")"
+[ -x "$SHIM/zfs" ] || fail "system-zfs shim has no zfs binary"
+[ "$(readlink -f "$SHIM/zfs")" = "$(readlink -f /usr/sbin/zfs)" ] \
+  || fail "system-zfs shim does not point at the guest /usr/sbin/zfs"
+SYS="$(zfs version | head -1)"
+NIXZ="$(PATH="$SHIM:$PATH" zfs version | head -1)"
+[ "$SYS" = "$NIXZ" ] || fail "Sanoid ZFS userland mismatch: $NIXZ vs $SYS"
+ok "Sanoid/Syncoid use the host zfs ($SYS)"
+
 # clean prior drill artifacts so repeated runs never fill the disk
 rm -rf /var/backups/zfs-drill-* 2>/dev/null || true
 W="/var/backups/zfs-drill-$(date +%s)"

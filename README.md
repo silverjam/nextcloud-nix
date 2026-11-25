@@ -403,6 +403,13 @@ GFS-snapshotted: restic already keeps its own hourly/daily history inside the
 repo. Syncoid still replicates the repo to `backup/restic` hourly using its
 own rolling `syncoid_*` snapshot.
 
+Sanoid and Syncoid run through a `system-zfs` shim pointing at the host's
+`/usr/sbin` ZFS binaries, so their userland matches the Ubuntu kernel module
+(the default nixpkgs package would use its bundled ZFS 2.4.4 against the
+host's 2.4.1 module). The shim path is the `zfsHostBin` flake value; on NixOS
+point it at `/run/booted-system/sw/bin` (the userland for the booted kernel)
+or at `pkgs.zfs`, so the same override follows the NixOS kernel/userland.
+
 `just snapshots-visible` sets `snapdir=visible` on the datadir and restic
 datasets (source and replica). Their snapshots are then visible at
 `<mountpoint>/.zfs/snapshot/` — for example

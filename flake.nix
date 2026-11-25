@@ -632,6 +632,18 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         [${zfsPoolPrimary}/nextcloud]
             use_template = gfs
       '';
+      # Sanoid/Syncoid must use the same ZFS userland as the running kernel
+      # module. Ubuntu's module is the distro's, so point them at /usr/sbin
+      # instead of nixpkgs' zfs-user. On NixOS set zfsHostBin to the booted
+      # system's bin dir (or the Nix zfs package) so the versions match again.
+      zfsHostBin = "/usr/sbin";
+      systemZfs = pkgs.runCommand "system-zfs" { } ''
+        mkdir -p $out/bin
+        for b in zfs zpool zdb; do
+          ln -s ${zfsHostBin}/$b $out/bin/$b
+        done
+      '';
+      sanoid = pkgs.sanoid.override { zfs = systemZfs; };
       # archive import (plan of record): copy the archive dataset into a
       # service user's folder and group-share it; completes with import-complete
       archiveOwner = "archive";
@@ -2114,7 +2126,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # run dirs are recreated idempotently (the host is not NixOS, so there
         # is no tmpfiles.d rule for them).
         install -d -m 0700 /var/cache/sanoid /run/sanoid
-        ${pkgs.sanoid}/bin/sanoid \
+        ${sanoid}/bin/sanoid \
           --configdir=${sanoidConfig} \
           --cache-dir=/var/cache/sanoid \
           --run-dir=/run/sanoid \
@@ -2131,7 +2143,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # source (--delete-target-snapshots), and must not inherit the
         # source's mountpoint (the replica is mounted under ${replicaMount}).
         RC=0
-        ${pkgs.sanoid}/bin/syncoid --no-sync-snap --delete-target-snapshots \
+        ${sanoid}/bin/syncoid --no-sync-snap --delete-target-snapshots \
           --recvoptions="x mountpoint" \
           ${zfsPoolPrimary}/nextcloud ${replicaDataset} || RC=1
 
@@ -2139,7 +2151,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
           # restic already versions its repo inside the dataset; let Syncoid
           # create/recycle its own syncoid_* snapshot rather than adding a
           # second GFS history of the same backup catalog.
-          ${pkgs.sanoid}/bin/syncoid --delete-target-snapshots \
+          ${sanoid}/bin/syncoid --delete-target-snapshots \
             --recvoptions="x mountpoint" \
             ${resticDataset} ${resticReplica} || RC=1
         fi
@@ -2148,7 +2160,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         # on hosts that are still in the import window (its snapshots predate
         # Sanoid, so --no-sync-snap just ships the existing ones).
         if zfs list -H -o name ${archiveDataset} >/dev/null 2>&1; then
-          ${pkgs.sanoid}/bin/syncoid --no-sync-snap --delete-target-snapshots \
+          ${sanoid}/bin/syncoid --no-sync-snap --delete-target-snapshots \
             --recvoptions="x mountpoint" \
             ${archiveDataset} ${zfsPoolBackup}/archive || RC=1
         else
