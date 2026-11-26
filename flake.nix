@@ -656,8 +656,8 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       archiveSharePerms = "15"; # read+change+create+delete, no re-share
       archiveSource = "/mnt/archive";
       ncWebUrl = "http://127.0.0.1:${webPort}";
-      # Declarative apps. All four are hash-pinned and extracted into
-      # store-apps at deploy, so neither the app store nor a manual app
+      # Declarative apps. The enabled apps are hash-pinned and extracted into
+      # the read-only Nix tree, so neither the app store nor a manual app
       # update can drift their versions. App upgrades are flake edits.
       vendoredApps = [ "music" "memories" "files_archive" "ebookreader" ];
       vendoredAppsJoined = lib.concatStringsSep " " vendoredApps;
@@ -686,6 +686,13 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         url = "https://github.com/pulsejet/memories/releases/download/v11.1.4/memories.tar.gz";
         hash = "sha256-ObXsa/F1M0Qy6MQJoEhNqGb/+QPGNJQsyzxBgJ+QY1M=";
       };
+      # Official account-move app (NC 29-34). Installed in the read-only tree
+      # but NOT in vendoredApps: enable it only for a user migration, then
+      # disable it again. Used for the josphine -> josephine move.
+      userMigrationApp = pkgs.fetchurl {
+        url = "https://github.com/nextcloud-releases/user_migration/releases/download/v10.3.0/user_migration-v10.3.0.tar.gz";
+        hash = "sha256-OQCJcUD85iO1ryOFhz1lD2rc5ZO5nTQCqsSXgBWvS+s=";
+      };
       # One read-only app tree in the Nix store. Nextcloud gets it as a
       # non-writable apps_path; the app store is disabled, so the code cannot
       # drift through a web-UI update. App upgrades are flake edits.
@@ -695,6 +702,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
         tar xzf ${memoriesApp} -C $out
         tar xzf ${filesArchiveApp} -C $out
         tar xzf ${ebookReaderApp} -C $out
+        tar xzf ${userMigrationApp} -C $out
       '';
       # interim: the archive dataset binds INTO the datadir (zero copy) and is
       # served as a native shared folder; option B's copy replaces this later
@@ -806,7 +814,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       provisionedUsers = { 
         jason = { displayName = "Jason Mobarak"; groups = ["family" "parents"]; };
         archive = { displayName = "Family Archive"; }; # shared-archive owner (no quota)
-        josphine = { displayName = "Josephine Sheng"; groups = ["family" "parents"]; };
+        josephine = { displayName = "Josephine Sheng"; groups = ["family" "parents" "mobaraks"]; };
         addie = { displayName = "Addie Mobarak"; groups = ["family" "kids"]; };
         thaelia = { displayName = "Thaelia Mobarak"; groups = ["family" "kids"]; };
         richard = { displayName = "Richard Mobarak"; groups = ["family"]; };
@@ -816,7 +824,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       # (files + full pg_dump into /var/backups/nextcloud/deprovisioned/<uid>/<ts>/)
       # and the deletion aborts if that backup cannot be verified. Entries
       # are self-draining: once the user is gone they are a no-op.
-      deprovisionedUsers = [ ];
+      deprovisionedUsers = [ "josphine" ];
       # render per-user specs: uid<TAB>display<TAB>quota<HAB>groups(;-sep)
       provisionSpecLines = lib.mapAttrsToList
         (name: u:

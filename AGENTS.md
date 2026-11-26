@@ -150,6 +150,13 @@ verified against real failures during the ZFS migration (Nov 2026).
    vendored hash-pinned fetchurl when the author publishes public tarballs
    (files_archive pattern), store-driven `app:install`+`app:enable`
    (idempotent) otherwise. Platform compat lives in appinfo/info.xml.
+8. **user_migration exports files/calendars/contacts/account settings but
+   NOT shares** (v10.3.0, official app; vendored in the read-only tree but
+   not enabled). A login rename is: create the target → `user:export <src>
+   <dir>` → `user:import --user <dst> <zip>` → re-share incoming shares →
+   `deprovisionedUsers` (verified backup + delete). The import prefixes
+   calendar URIs with `migrated-` and can leave a duplicate canonical
+   birthday calendar; delete the migrated duplicate (`dav:delete-calendar`).
 
 ## Nix-native patterns (do not regress)
 

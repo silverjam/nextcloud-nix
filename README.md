@@ -437,6 +437,11 @@ entry (`/nix-apps`), Caddy serves their static assets from the same tree, and
 URL/hash, run `just deploy`. There is no web-UI or app-store update path that
 can drift the code out from under the pin.
 
+The official `user_migration` 10.3.0 app is also vendored into that tree but
+is deliberately **not enabled**: it is the supported way to move an account
+(Nextcloud has no rename). Enable it only for the move; its export covers
+files, calendars, contacts, profile and preferences — **not shares**.
+
 ## Maintenance cookbook
 
 ### Users — can this be done in Nix?
@@ -487,6 +492,24 @@ provisionedUsers = {
     *refused* if that backup cannot be verified. Entries no-op once the user
     is gone. Removing a user from `provisionedUsers` alone does nothing;
   - passwords of existing users are never rotated by deploys.
+
+### Renaming a login (user ID)
+
+Nextcloud has no in-place rename. Move the account with the vendored official
+`user_migration` app, then deprovision the source:
+
+```bash
+nix run .#occ -- app:enable user_migration
+nix run .#occ -- user:export <source> /var/backups/nextcloud
+nix run .#occ -- user:import --user <target> <archive>   # confirm overwrite
+nix run .#occ -- app:disable user_migration
+```
+
+Add the target to the same groups, re-create the incoming shares (the export
+does **not** include shares), and update the flake's `provisionedUsers`. Delete
+the source by adding it to `deprovisionedUsers` and deploying: the provision
+unit takes a verified per-user files + database backup first, then removes it.
+Clients must reconnect because the login and DAV URLs change.
 
 ### Everything else worth knowing
 

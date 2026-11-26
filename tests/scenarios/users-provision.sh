@@ -60,7 +60,7 @@ printf 'drill2-payload\n' > "$F"
 chown nextcloud:nextcloud "$F"
 ok "drill2 created with a file to lose"
 
-sed -i 's|deprovisionedUsers = \[ \];|deprovisionedUsers = [ "drill2" ];|' /test/flake.nix
+sed -i 's|deprovisionedUsers = \[\(.*\)\];|deprovisionedUsers = [\1 "drill2"];|' /test/flake.nix
 # realistic deprovision: remove from the provision list too (drill2 leaves)
 sed -i 's| drill2 = { displayName = "Drill Two"; }; ||' /test/flake.nix
 nix run .#deploy

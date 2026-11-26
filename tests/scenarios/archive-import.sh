@@ -69,7 +69,7 @@ PW="$(grep -ah '^uid=jason password=' /var/lib/nextcloud/provision-credentials-*
   | sed -E 's/^[^ ]+ password=([^ ]+).*/\1/' | tail -1)"
 [ -n "$PW" ] || fail "jason credentials not found"
 expect_equal 2 \
-  "$(Q "SELECT count(*) FROM oc_share WHERE share_type=0 AND permissions=15 AND share_with IN ('jason','josphine')")" \
+  "$(Q "SELECT count(*) FROM oc_share WHERE share_type=0 AND permissions=15 AND share_with IN ('jason','josephine')")" \
   "one type-0 user-share per member (NC 34 drops type-3 group recipients)"
 # DAV hrefs are URL-encoded (Archive%202007-2024): grep the encoded form. The
 # recipient-side mount can also lag just-created shares — retry either way.
