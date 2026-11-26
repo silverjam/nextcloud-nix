@@ -824,7 +824,7 @@ print(' '.join(sorted(json.load(sys.stdin).get('${archiveShareGroup}', []))))")"
       # (files + full pg_dump into /var/backups/nextcloud/deprovisioned/<uid>/<ts>/)
       # and the deletion aborts if that backup cannot be verified. Entries
       # are self-draining: once the user is gone they are a no-op.
-      deprovisionedUsers = [ "josphine" ];
+      deprovisionedUsers = [ ];
       # render per-user specs: uid<TAB>display<TAB>quota<HAB>groups(;-sep)
       provisionSpecLines = lib.mapAttrsToList
         (name: u:
